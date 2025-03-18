@@ -4,9 +4,12 @@ from pydantic import BaseModel
 class Tx(BaseModel):
     credit: str
     debit: str
+    asset: str
     amount: float
-    time: int
+    uniq: str
     sign: str
+    hash: Optional[str]
+    msg: Optional[str]
 
 class Token(BaseModel):
     creater: str
