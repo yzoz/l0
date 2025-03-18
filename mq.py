@@ -5,6 +5,7 @@ import os
 import time
 from pymongo import MongoClient
 import hashlib
+import base58
 from src.models import Tx
 
 cli = MongoClient('localhost', 27017)
@@ -13,16 +14,17 @@ db = cli.feo
 txs = db.tx
 
 def tob2b(t):
-    h = hashlib.blake2b()
+    h = hashlib.sha512()
     h.update(bytes(t.encode("utf-8")))
-    return h.digest().hex()
+    return base58.b58encode(h.digest()).decode("utf-8")
 
 def on_message(ch, method, properties, tx):
     tx = tx.decode("utf-8")
     tx = json.loads(tx)
     tx = Tx(**tx)
     tx.time = time.time_ns()
-    m = tx.credit + tx.debit + str(tx.amount) + str(tx.msg) + str(tx.time)
+    tx.v = 1
+    m = tx.credit + tx.debit + str(tx.amount) + tx.asset + tx.uniq + tx.msg
     this_hash = tob2b(m)
     last = txs.find_one({'$query': {}, '$orderby': {'_id': -1}})
     last_hash = last['hash']

@@ -1,5 +1,6 @@
 from src.models import Tx
 from pymongo import MongoClient
+import time
 
 cli = MongoClient('localhost', 27017)
 
@@ -12,14 +13,14 @@ PUB: EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1
 """
 
 tx = Tx(
-        debit = "0",
-        credit = "EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1",
+        debit = "EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1",
+        credit = "0",
         amount = 1000000,
         asset = "0",
         uniq = "0",
         sign = "0",
         v = 1,
-        time = 0,
+        time = time.time_ns(),
         hash = "0",
         msg = ""
     )
