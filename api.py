@@ -1,4 +1,3 @@
-# src/api/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -6,7 +5,7 @@ from strawberry.fastapi import GraphQLRouter
 from src.api.schema import schema
 from src.models.tx import Tx
 from src.database.mongodb import MongoDB
-from src.database.queues import publish_message
+from src.database.queues import RabbitMQ  # Используем новый класс
 from src.utils.crypto import verify_message
 from fastapi.encoders import jsonable_encoder
 import json
@@ -15,7 +14,12 @@ import base58
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db = MongoDB()
+    app.state.rabbit = RabbitMQ(host='localhost', queue_name='tx')
+    await app.state.rabbit.connect()
     yield
+    app.state.db.client.close()
+    await app.state.db.async_client.close()
+    await app.state.rabbit.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -31,7 +35,7 @@ app.add_middleware(
 async def send(tx: Tx):
     db = app.state.db
     try:
-        uniq = await db.find_one({"time": tx.uniq})
+        uniq = await db.find_one({"uniq": tx.uniq})
         if uniq:
             return {'detail': [{'success': 0, 'msg': f'not uniq ({tx.uniq})'}]}
         if tx.credit == tx.debit:
@@ -44,22 +48,23 @@ async def send(tx: Tx):
         except:
             return {'detail': [{'success': 0, 'msg': f'bad address'}]}
 
-        m = tx.credit + tx.debit + str(tx.amount) + tx.asset + tx.uniq + tx.msg
-        print(f"Message to verify: {m}")  # Отладка
+        m = tx.credit + tx.debit + str(tx.amount) + tx.asset + tx.uniq + (tx.msg or "")
+        print(f"Message to verify: {m}")
         v = verify_message(tx.credit, tx.sign)
-        print(f"Verified signature: {v}")  # Отладка
+        print(f"Verified signature: {v}")
         if v == m:
             balance = await get_balance(tx.credit, db)
-            print(f"Balance for {tx.credit}: {balance}")  # Отладка
+            print(f"Balance for {tx.credit}: {balance}")
             if balance == 0 or balance < tx.amount:
                 return {'detail': [{'success': 0, 'msg': f'bad balance'}]}
-            print("Publishing to RabbitMQ:", jsonable_encoder(tx))  # Отладка
-            await publish_message(json.dumps(jsonable_encoder(tx)))
+            message = json.dumps(jsonable_encoder(tx))
+            print("Publishing to RabbitMQ:", message)
+            await app.state.rabbit.publish_message(message)
             return {'detail': [{'success': 1, 'msg': 'ok'}]}
         else:
             return {'detail': [{'success': 0, 'msg': 'bad sign'}]}
     except Exception as e:
-        print(f"Error in send: {str(e)}")  # Отладка
+        print(f"Error in send: {str(e)}")
         return {'detail': [{'success': 0, 'msg': str(e)}]}
 
 async def get_balance(addr: str, db: MongoDB):

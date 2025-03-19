@@ -18,7 +18,7 @@ async def arange(count):
         await asyncio.sleep(0.0)
 
 async def send():
-    async for _ in arange(1000):
+    async for _ in arange(10):
         i = random.randint(0, 2)
         c = pk[i]
         priv = sk[i]
