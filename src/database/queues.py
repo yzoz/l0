@@ -1,24 +1,34 @@
-# src/database/queues.py
-from aio_pika import connect_robust, Message, DeliveryMode
-import pika
+import asyncio
+from aio_pika import connect_robust, Message, DeliveryMode, IncomingMessage
 
-async def publish_message(message: str, queue_name: str = "tx"):
-    try:
-        connection = await connect_robust("amqp://guest:guest@localhost/")
-        channel = await connection.channel()
-        await channel.declare_queue(queue_name, durable=True)
-        print(f"Publishing message to {queue_name}: {message}")  # Отладка
-        await channel.default_exchange.publish(
+class RabbitMQ:
+    def __init__(self, host='localhost', queue_name='tx'):
+        self.host = host
+        self.queue_name = queue_name
+        self.connection = None
+        self.channel = None
+
+    async def connect(self):
+        """Инициализация подключения к RabbitMQ."""
+        self.connection = await connect_robust(f"amqp://guest:guest@{self.host}/")
+        self.channel = await self.connection.channel()
+        await self.channel.declare_queue(self.queue_name, durable=True)
+
+    async def publish_message(self, message: str):
+        """Публикация сообщения в очередь."""
+        await self.channel.default_exchange.publish(
             Message(message.encode("utf-8"), delivery_mode=DeliveryMode.PERSISTENT),
-            routing_key=queue_name
+            routing_key=self.queue_name
         )
-        await connection.close()
-    except Exception as e:
-        print(f"Error publishing to RabbitMQ: {str(e)}")  # Отладка
 
-def consume_messages(callback, queue_name: str = "tx"):
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-    channel = connection.channel()
-    channel.queue_declare(queue=queue_name, durable=True)  # Добавлено создание очереди
-    channel.basic_consume(queue_name, callback)
-    channel.start_consuming()
+    async def consume_messages(self, callback):
+        """Потребление сообщений из очереди с использованием переданного callback."""
+        queue = await self.channel.declare_queue(self.queue_name, durable=True)
+        async with queue.iterator() as queue_iter:
+            async for message in queue_iter:
+                await callback(message)
+
+    async def close(self):
+        """Закрытие подключения."""
+        if self.connection and not self.connection.is_closed:
+            await self.connection.close()

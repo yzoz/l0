@@ -12,8 +12,8 @@ class MongoDB:
         self.txs = self.db.tx
         self.async_txs = self.async_db.tx
 
-    def insert_tx(self, tx: Tx):
-        result = self.txs.insert_one(dict(tx))
+    async def insert_tx(self, tx: Tx):
+        result = await self.async_txs.insert_one(dict(tx))
         return result.inserted_id
 
     async def find_one(self, query: dict):
