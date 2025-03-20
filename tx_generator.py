@@ -1,4 +1,5 @@
 # src/scripts/tx_generator.py
+import logging
 import time
 import random
 import json
@@ -17,8 +18,8 @@ async def arange(count):
         yield(i)
         await asyncio.sleep(0.0)
 
-async def send():
-    async for _ in arange(10):
+async def send(in_set):
+    async for _ in arange(int(in_set)):
         i = random.randint(0, 2)
         c = pk[i]
         priv = sk[i]
@@ -42,12 +43,15 @@ async def send():
                 'sign': s,
                 'msg': m
         }
-        print(tx)
+        print(f"Sending transaction: {tx}")
+        print("_" * 80)
         r = await client.post('http://127.0.0.1:8000/send/', data=json.dumps(tx))
-        print(r.text)
+        print("_" * 80)
+        print(f"Response: {r.text}")
 
 async def main():
-    await asyncio.gather(*[send() for i in range(50)])
+    in_set = input("Enter the number of transactions to send: ")
+    await asyncio.gather(*[send(in_set) for i in range(50)])
 
 if __name__ == '__main__':
     asyncio.run(main())
