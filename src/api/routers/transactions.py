@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from src.models.tx import Tx
 from src.database.mongodb import MongoDB
 from src.utils.crypto import verify_message
@@ -8,29 +8,31 @@ import base58
 
 router = APIRouter()
 
-# Зависимость для получения db из app.state
-async def get_db(app):
-    return app.state.db
+async def get_db(request: Request):
+    return request.app.state.db
 
-# Зависимость для получения rabbit из app.state
-async def get_rabbit(app):
-    return app.state.rabbit
+async def get_rabbit(request: Request):
+    return request.app.state.rabbit
 
 @router.post("/send/")
-async def send(tx: Tx, db: MongoDB = Depends(get_db), rabbit=Depends(get_rabbit)):
+async def send(
+    tx: Tx,
+    db: MongoDB = Depends(get_db),
+    rabbit = Depends(get_rabbit)
+):
     try:
         uniq = await db.find_one({"uniq": tx.uniq})
         if uniq:
             return {'detail': [{'success': 0, 'msg': f'not uniq ({tx.uniq})'}]}
         if tx.credit == tx.debit:
-            return {'detail': [{'success': 0, 'msg': f'not for yourself'}]}
+            return {'detail': [{'success': 0, 'msg': 'not for yourself'}]}
 
         try:
             addr_len = len(base58.b58decode(tx.debit))
             if addr_len != 32:
-                return {'detail': [{'success': 0, 'msg': f'bad address size'}]}
-        except:
-            return {'detail': [{'success': 0, 'msg': f'bad address'}]}
+                return {'detail': [{'success': 0, 'msg': 'bad address size'}]}
+        except Exception:
+            return {'detail': [{'success': 0, 'msg': 'bad address'}]}
 
         m = tx.credit + tx.debit + str(tx.amount) + tx.asset + tx.uniq + (tx.msg or "")
         print(f"Message to verify: {m}")
@@ -40,7 +42,7 @@ async def send(tx: Tx, db: MongoDB = Depends(get_db), rabbit=Depends(get_rabbit)
             balance = await get_balance(tx.credit, db)
             print(f"Balance for {tx.credit}: {balance}")
             if balance == 0 or balance < tx.amount:
-                return {'detail': [{'success': 0, 'msg': f'bad balance'}]}
+                return {'detail': [{'success': 0, 'msg': 'bad balance'}]}
             message = json.dumps(jsonable_encoder(tx))
             print("Publishing to RabbitMQ:", message)
             await rabbit.publish_message(message)
@@ -52,14 +54,18 @@ async def send(tx: Tx, db: MongoDB = Depends(get_db), rabbit=Depends(get_rabbit)
         return {'detail': [{'success': 0, 'msg': str(e)}]}
 
 async def get_balance(addr: str, db: MongoDB):
-    income_q = [{'$match': {'debit': addr}}, {'$group': {'_id': None, 'sum': {'$sum': '$amount'}}}]
-    outcome_q = [{'$match': {'credit': addr}}, {'$group': {'_id': None, 'sum': {'$sum': '$amount'}}}]
-    if (income := await db.aggregate(income_q)):
-        income = income[0]['sum']
-        if (outcome := await db.aggregate(outcome_q)):
-            outcome = outcome[0]['sum']
-            return income - outcome
-        else:
-            return income
-    else:
-        return 0
+    income_q = [
+        {'$match': {'debit': addr}},
+        {'$group': {'_id': None, 'sum': {'$sum': '$amount'}}}
+    ]
+    outcome_q = [
+        {'$match': {'credit': addr}},
+        {'$group': {'_id': None, 'sum': {'$sum': '$amount'}}}
+    ]
+    income_result = await db.aggregate(income_q)
+    if income_result:
+        income = income_result[0]['sum']
+        outcome_result = await db.aggregate(outcome_q)
+        outcome = outcome_result[0]['sum'] if outcome_result else 0
+        return income - outcome
+    return 0
