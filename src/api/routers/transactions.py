@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request, HTTPException
 from src.models.tx import Tx
+from src.utils.balance import get_balance
 from src.database.mongodb import MongoDB
 from src.utils.crypto import verify_message
 from fastapi.encoders import jsonable_encoder
@@ -97,24 +98,24 @@ async def send(
         raise HTTPException(status_code=500, detail=[{"success": 0, "msg": f"server error: {str(e)}"}])
 
 """ Эта функция оптимизированная для получения баланса """
-async def get_balance(addr: str, db: MongoDB) -> int:
-    """Оптимизированная функция получения баланса."""
-    pipeline = [
-        {"$facet": {
-            "income": [
-                {"$match": {"debit": addr}},
-                {"$group": {"_id": None, "sum": {"$sum": "$amount"}}}
-            ],
-            "outcome": [
-                {"$match": {"credit": addr}},
-                {"$group": {"_id": None, "sum": {"$sum": "$amount"}}}
-            ]
-        }}
-    ]
-    result = await db.aggregate(pipeline)
-    income = result[0]["income"][0]["sum"] if result[0]["income"] else 0
-    outcome = result[0]["outcome"][0]["sum"] if result[0]["outcome"] else 0
-    return income - outcome
+# async def get_balance(addr: str, db: MongoDB) -> int:
+#     """Оптимизированная функция получения баланса."""
+#     pipeline = [
+#         {"$facet": {
+#             "income": [
+#                 {"$match": {"debit": addr}},
+#                 {"$group": {"_id": None, "sum": {"$sum": "$amount"}}}
+#             ],
+#             "outcome": [
+#                 {"$match": {"credit": addr}},
+#                 {"$group": {"_id": None, "sum": {"$sum": "$amount"}}}
+#             ]
+#         }}
+#     ]
+#     result = await db.aggregate(pipeline)
+#     income = result[0]["income"][0]["sum"] if result[0]["income"] else 0
+#     outcome = result[0]["outcome"][0]["sum"] if result[0]["outcome"] else 0
+#     return income - outcome
 
 async def validate_tx(tx: Tx, db: MongoDB) -> None:
     """Асинхронная проверка валидности и правильности данных транзакции."""
