@@ -3,11 +3,14 @@ import strawberry
 from typing import List, Optional
 from src.models.tx import Tx
 from src.database.mongodb import MongoDB
+from src.utils.balance import get_balance  # Импортируем функцию
 
+# Определение типа транзакции для GraphQL
 @strawberry.experimental.pydantic.type(model=Tx, all_fields=True)
 class TxType:
     pass
 
+# Функция для получения списка транзакций (оставляем как есть или добавляем, если её нет)
 async def get_tx(amount: int, addr: str, msg: Optional[bool], time: int, skip: int, limit: int, db: MongoDB) -> List[TxType]:
     if amount >= 0:
         amount_direction = '$gt'
@@ -19,7 +22,7 @@ async def get_tx(amount: int, addr: str, msg: Optional[bool], time: int, skip: i
         time_direction = '$gt'
     else:
         time_direction = '$lt'
-        time = -amount
+        time = -time
 
     q = {
         'amount': {amount_direction: amount},
@@ -41,10 +44,11 @@ async def get_tx(amount: int, addr: str, msg: Optional[bool], time: int, skip: i
         )
     ]
 
+# Определение GraphQL схемы
 @strawberry.type
 class Query:
     @strawberry.field
-    async def getTx(
+    async def tx(
             self,
             msg: Optional[bool] = None,
             addr: str = '',
@@ -55,5 +59,10 @@ class Query:
     ) -> List[TxType]:
         db = MongoDB()
         return await get_tx(amount, addr, msg, time, skip, limit, db)
+
+    @strawberry.field
+    async def balance(self, addr: str) -> int:
+        db = MongoDB()
+        return await get_balance(addr, db)
 
 schema = strawberry.Schema(Query)
