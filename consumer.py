@@ -7,6 +7,7 @@ from src.database.queues import RabbitMQ
 from src.database.mongodb import MongoDB
 from src.models.tx import Tx
 from src.utils.hash import tob2b
+from src.utils.balance import get_balance  # Импортируем функцию
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +27,13 @@ async def on_message(message: IncomingMessage):
         if await db.find_one({"uniq": tx.uniq}):
             logger.info(f"Duplicate transaction detected: {tx.uniq}")
             await message.ack()
+            return
+
+        # Проверка баланса отправителя
+        balance = await get_balance(tx.credit, db)
+        if balance < tx.amount:
+            logger.error(f"Insufficient balance for {tx.credit}: {balance} < {tx.amount}")
+            await message.nack(requeue=False) # False если баланс недостаточен, отклоняем сообщение. True если баланс не отклоняем сообщение и повторяем попытку
             return
 
         tx.time = int(time.time() * 1e9)
@@ -61,7 +69,6 @@ async def main():
         logger.error(f"Error in main: {e}")
         raise
     finally:
-        # Проверяем состояние перед закрытием
         if rabbitmq.connection and not rabbitmq.connection.is_closed:
             await rabbitmq.close()
             logger.info("RabbitMQ connection closed")
