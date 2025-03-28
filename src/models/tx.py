@@ -5,7 +5,7 @@ class Tx(BaseModel):
     credit: str
     debit: str
     asset: str = "0"
-    amount: float
+    amount: int
     uniq: str
     sign: str
     msg: Optional[str] = ""
