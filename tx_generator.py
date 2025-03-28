@@ -41,7 +41,7 @@ async def send(in_set):
         c = pk[i]  # credit (отправитель)
         priv = sk[i]  # приватный ключ
         d = pk[random.randint(0, 3)]  # debit (получатель)
-        a = float(random.randint(100, 110))  # сумма
+        a = random.randint(10, 1000)  # сумма
         u = str(round(time.time() * 1000))  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
         h = c + d + str(a) + "0" + u + m  # строка для подписи
