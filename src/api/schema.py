@@ -61,7 +61,7 @@ class Query:
         return await get_tx(amount, addr, msg, time, skip, limit, db)
 
     @strawberry.field
-    async def balance(self, addr: str) -> int:
+    async def balance(self, addr: str) -> float:
         db = MongoDB()
         return await get_balance(addr, db)
 

@@ -18,12 +18,14 @@ client = httpx.AsyncClient()
 sk = [
     'DF3998wbqyBn9uSA4BcMJQAkpnZb21a1vRLo9Nw8GwWy',
     '8no9RFLqKkC5HSLmSqkTnrX6pD2Fn5MNNbJmdGP1GivQ',
-    '6savWyJQgcZEfDBt9N1u2dhPg68cng43zQFKgyM9qKDW'
+    '6savWyJQgcZEfDBt9N1u2dhPg68cng43zQFKgyM9qKDW',
+    'AaJi3nRc4nvVp2VTBLpfd784bgwQrVQCjaAYBS4dsmgW'
 ]
 pk = [
     'EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1',
     'A9huRv7vtELAYQ4nQYtEWfn5NEdqXBUs722TdsiZR3ST',
-    '2RAHCZg7SfyLY6x5uLmtDh1tNbZr4w5NTPMWXpHrqdyc'
+    '2RAHCZg7SfyLY6x5uLmtDh1tNbZr4w5NTPMWXpHrqdyc',
+    '6mQASMy9Zx6hFsSeVfbXuyQaSCBamgSQ4TaAFq5kDLxi'
 ]
 
 async def arange(count):
@@ -35,10 +37,10 @@ async def arange(count):
 async def send(in_set):
     """Отправка случайных транзакций."""
     async for _ in arange(int(in_set)):
-        i = random.randint(0, 2)
+        i = random.randint(0, 3)
         c = pk[i]  # credit (отправитель)
         priv = sk[i]  # приватный ключ
-        d = pk[random.randint(0, 2)]  # debit (получатель)
+        d = pk[random.randint(0, 3)]  # debit (получатель)
         a = float(random.randint(100, 110))  # сумма
         u = str(round(time.time() * 1000))  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение

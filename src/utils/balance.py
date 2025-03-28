@@ -1,6 +1,6 @@
 from src.database.mongodb import MongoDB
 
-async def get_balance(addr: str, db: MongoDB) -> int:
+async def get_balance(addr: str, db: MongoDB) -> float:
     """Функция для получения баланса по адресу."""
     pipeline = [
         {"$facet": {
