@@ -8,6 +8,7 @@ from nacl.signing import SigningKey
 import base58
 import uuid
 from src.utils.data import ordered_sum
+from hashlib import sha512
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -61,7 +62,7 @@ async def send(in_set):
         # Подпись транзакции
         priv = base58.b58decode(priv)
         signing_key = SigningKey(priv)
-        message_bytes = bytes(h.encode("utf-8"))
+        message_bytes = sha512(h.encode("utf-8")).digest()
         signed = base58.b58encode(signing_key.sign(message_bytes))
         s = signed.decode("utf-8")
         tx = {
