@@ -27,7 +27,8 @@ async def on_message(message: IncomingMessage):
         m = ordered_sum(tx)
         this_hash = hash_hex(m)
         tx = TxWrite(**tx)
-        tx.time = int(time.time() * 1e9)
+        #tx.time = int(time.time() * 1e9)
+        tx.time = time.time_ns()
         tx.v = 1
 
         if await db.find_one({"uniq": tx.uniq}):

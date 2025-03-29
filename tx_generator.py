@@ -46,7 +46,7 @@ async def send(in_set):
         c = pk[i]  # credit (отправитель)
         priv = sk[i]  # приватный ключ
         d = pk[random.randint(0, 4)]  # debit (получатель)
-        a = random.randint(10, 1000)  # сумма
+        a = random.randint(1, 1000000000)  # сумма
         u = str(uuid.uuid4())  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
         # Формируем транзакцию
@@ -56,7 +56,7 @@ async def send(in_set):
             'amount': a,
             'asset': "0",
             'uniq': u,
-            'msg': m          
+            'msg': m
         }
         h = ordered_sum(c)  # строка для подписи
         # Подпись транзакции

@@ -1,4 +1,4 @@
-from src.models.tx import Tx
+from src.models.tx import TxWrite
 from pymongo import MongoClient
 import time
 
@@ -8,14 +8,13 @@ db = cli.feo
 txs = db.tx
 
 """
-PRIV: DF3998wbqyBn9uSA4BcMJQAkpnZb21a1vRLo9Nw8GwWy
-PUB: EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1
+C8xjbHktooH8Pm1n57hHprfBSb4kxSfTcDS3ZZKBCTCR
 """
 
-tx = Tx(
-        debit = "EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1",
+tx = TxWrite(
+        debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
         credit = "0",
-        amount = 1000000,
+        amount = 1000000000000000,
         asset = "0",
         uniq = "0",
         sign = "0",
