@@ -31,7 +31,7 @@ async def on_message(message: IncomingMessage):
         tx.time = time.time_ns()
         tx.v = 1
 
-        if await db.find_one({"uniq": tx.uniq}):
+        if await db.find_one({"credit": tx.credit, "uniq": tx.uniq}):
             logger.info(f"Duplicate transaction detected: {tx.uniq}")
             await message.ack()
             return
