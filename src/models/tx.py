@@ -1,11 +1,11 @@
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, PositiveInt
 
 class Tx(BaseModel):
     credit: str
     debit: str
     asset: str
-    amount: int
+    amount: PositiveInt
     uniq: str
     msg: Optional[str] = ""
 
