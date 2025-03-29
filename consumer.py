@@ -5,8 +5,8 @@ import logging
 from aio_pika import IncomingMessage
 from src.database.queues import RabbitMQ
 from src.database.mongodb import MongoDB
-from src.models.tx import Tx
-from src.utils.hash import tob2b
+from src.models.tx import TxWrite
+from src.utils.data import hash_hex, ordered_sum
 from src.utils.balance import get_balance  # Импортируем функцию
 
 # Настройка логирования
@@ -22,7 +22,13 @@ async def on_message(message: IncomingMessage):
     try:
         tx_data = message.body.decode("utf-8")
         tx_dict = json.loads(tx_data)
-        tx = Tx(**tx_dict)
+        tx = tx_dict["content"]
+        tx['sign'] = tx_dict["sign"]
+        m = ordered_sum(tx)
+        this_hash = hash_hex(m)
+        tx = TxWrite(**tx)
+        tx.time = int(time.time() * 1e9)
+        tx.v = 1
 
         if await db.find_one({"uniq": tx.uniq}):
             logger.info(f"Duplicate transaction detected: {tx.uniq}")
@@ -36,21 +42,15 @@ async def on_message(message: IncomingMessage):
             await message.nack(requeue=False) # False если баланс недостаточен, отклоняем сообщение. True если баланс не отклоняем сообщение и повторяем попытку
             return
 
-        tx.time = int(time.time() * 1e9)
-        tx.v = 1
-
-        m = tx.credit + tx.debit + str(tx.amount) + tx.asset + tx.uniq + (tx.msg or "")
-        this_hash = tob2b(m)
-
         last = await db.find_one({'$query': {}, '$orderby': {'_id': -1}})
         last_hash = last['hash'] if last else "0"
         logger.info(f"Last hash: {last_hash}, This hash: {this_hash}")
 
-        tx.hash = tob2b(last_hash + this_hash)
+        tx.hash = hash_hex(last_hash + this_hash)
 
         result = await db.insert_tx(tx)
         if result:
-            logger.info(f"Saved transaction: {tx.dict()}")
+            logger.info(f"Saved transaction: {dict(tx)}")
             await message.ack()
         else:
             logger.error("Failed to save transaction")

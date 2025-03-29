@@ -6,6 +6,8 @@ import logging
 import httpx
 from nacl.signing import SigningKey
 import base58
+import uuid
+from src.utils.data import ordered_sum
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -19,13 +21,15 @@ sk = [
     'DF3998wbqyBn9uSA4BcMJQAkpnZb21a1vRLo9Nw8GwWy',
     '8no9RFLqKkC5HSLmSqkTnrX6pD2Fn5MNNbJmdGP1GivQ',
     '6savWyJQgcZEfDBt9N1u2dhPg68cng43zQFKgyM9qKDW',
-    'AaJi3nRc4nvVp2VTBLpfd784bgwQrVQCjaAYBS4dsmgW'
+    'C8xjbHktooH8Pm1n57hHprfBSb4kxSfTcDS3ZZKBCTCR',
+    'GtTXBxARCLoRUFcmv5QtU6L1neQkRdivRXCEMuigKba5'
 ]
 pk = [
     'EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1',
     'A9huRv7vtELAYQ4nQYtEWfn5NEdqXBUs722TdsiZR3ST',
     '2RAHCZg7SfyLY6x5uLmtDh1tNbZr4w5NTPMWXpHrqdyc',
-    '6mQASMy9Zx6hFsSeVfbXuyQaSCBamgSQ4TaAFq5kDLxi'
+    '9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy',
+    'RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR'
 ]
 
 async def arange(count):
@@ -37,33 +41,33 @@ async def arange(count):
 async def send(in_set):
     """Отправка случайных транзакций."""
     async for _ in arange(int(in_set)):
-        i = random.randint(0, 3)
+        i = random.randint(0, 4)
         c = pk[i]  # credit (отправитель)
         priv = sk[i]  # приватный ключ
-        d = pk[random.randint(0, 3)]  # debit (получатель)
+        d = pk[random.randint(0, 4)]  # debit (получатель)
         a = random.randint(10, 1000)  # сумма
-        u = str(round(time.time() * 1000))  # уникальный идентификатор
+        u = str(uuid.uuid4())  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
-        h = c + d + str(a) + "0" + u + m  # строка для подписи
-
+        # Формируем транзакцию
+        c = {
+            'credit': c,
+            'debit': d,
+            'amount': a,
+            'asset': "0",
+            'uniq': u,
+            'msg': m          
+        }
+        h = ordered_sum(c)  # строка для подписи
         # Подпись транзакции
         priv = base58.b58decode(priv)
         signing_key = SigningKey(priv)
         message_bytes = bytes(h.encode("utf-8"))
         signed = base58.b58encode(signing_key.sign(message_bytes))
         s = signed.decode("utf-8")
-
-        # Формируем транзакцию
         tx = {
-            'credit': c,
-            'debit': d,
-            'amount': a,
-            'asset': "0",
-            'uniq': u,
-            'sign': s,
-            'msg': m
+            "content": c,
+            "sign": s
         }
-
         logger.info(f"Sending transaction: {json.dumps(tx, indent=2)}")
         logger.info("_" * 80)
         r = await client.post('http://127.0.0.1:8000/send/', data=json.dumps(tx))
