@@ -18,4 +18,4 @@ def sign_message(signing_key_txt: str, message: str) -> str:
 
 def verify_message(verify_key_txt: str, signed_txt: str) -> str:
     verify_key = VerifyKey(base58.b58decode(verify_key_txt))
-    return verify_key.verify(base58.b58decode(signed_txt)).decode("utf-8")
+    return verify_key.verify(base58.b58decode(signed_txt))

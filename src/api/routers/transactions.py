@@ -9,6 +9,7 @@ import json
 import base58
 import logging
 import asyncio
+from hashlib import sha512
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -50,10 +51,9 @@ async def send(
             raise HTTPException(status_code=400, detail=[{"success": 0, "msg": "not for yourself"}])
 
         # Проверка подписи
-        message_to_verify = ordered_sum(dict(tx.content))
-        #message_to_verify = tx.content.credit + tx.content.debit + str(tx.content.amount) + tx.content.asset + tx.content.uniq + (tx.content.msg or "")
-        logger.info(f"Message to verify: {message_to_verify}")
+        message_to_verify = sha512(ordered_sum(dict(tx.content)).encode('utf-8')).digest()
         verified_message = verify_message(tx.content.credit, tx.sign)
+        logger.info(f"Message to verify: {message_to_verify} | Verified message: {verified_message}")
         if verified_message != message_to_verify:
             logger.warning(f"Signature verification failed: credit={tx.content.credit}")
             raise HTTPException(status_code=400, detail=[{"success": 0, "msg": "bad sign"}])
