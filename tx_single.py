@@ -5,10 +5,6 @@ import uuid
 import random
 from src.utils.data import ordered_sum
 from src.utils.crypto import sign_message
-from nacl.signing import SigningKey
-from nacl.encoding import HexEncoder
-import base58
-from hashlib import sha512
 import json
 
 client = httpx.AsyncClient()
