@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Version](https://img.shields.io/badge/Version-0.1.0-orange.svg)
+![Version](https://img.shields.io/badge/Version-0.0.12-orange.svg)
 
 `l0-python` — это экспериментальный проект блокчейна уровня 0, реализованный на Python. Он предоставляет инфраструктуру для обработки транзакций, токенов и NFT с использованием криптографических подписей, асинхронной обработки через RabbitMQ и хранения данных в MongoDB.
 
