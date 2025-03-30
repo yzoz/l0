@@ -23,6 +23,7 @@ class TxStore(BaseModel):
     uniq: str
     msg: Optional[str] = ""
     sign: str
+
 class TxWrite(BaseModel):
     mom: str
     dad: str

@@ -5,57 +5,110 @@ import logging
 from aio_pika import IncomingMessage
 from src.database.queues import RabbitMQ
 from src.database.mongodb import MongoDB
-from src.models.tx import TxWrite
+from src.models.tx import TxWrite, TxStore
 from src.utils.data import hash_hex, ordered_sum
-from src.utils.balance import get_balance  # Импортируем функцию
+from src.utils.balance import get_balance
+#import redis.asyncio as redis
+import redis
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+HOME_TIME = 300 * 1_000_000
+
 # Инициализация клиентов
 db = MongoDB()
 rabbitmq = RabbitMQ(host='localhost', queue_name='tx')
+mom = redis.Redis(host='localhost', db=1)
+dad = redis.Redis(host='localhost', db=2)
+home = redis.Redis(host='localhost', db=3)
 
 async def on_message(message: IncomingMessage):
+    logger.info("_" * 80)
     """Обработка входящего сообщения."""
+    now = int(time.time_ns() / 1000)
     try:
         tx_data = message.body.decode("utf-8")
         tx_dict = json.loads(tx_data)
-        tx = tx_dict["content"]
-        tx['sign'] = tx_dict["sign"]
-        m = ordered_sum(tx)
-        this_hash = hash_hex(m)
-        tx = TxWrite(**tx)
-        #tx.time = int(time.time() * 1e9)
-        tx.time = time.time_ns()
-        tx.v = 1
+        c = tx_dict["content"]
+        c["sign"] = tx_dict["sign"]
+        m = ordered_sum(c)
+        hash = hash_hex(m)
+        tx = TxStore(**c)
 
         if await db.find_one({"credit": tx.credit, "uniq": tx.uniq}):
             logger.info(f"Duplicate transaction detected: {tx.uniq}")
             await message.ack()
             return
-
-        # Проверка баланса отправителя
+        
         balance = await get_balance(tx.credit, db)
         if balance < tx.amount:
             logger.error(f"Insufficient balance for {tx.credit}: {balance} < {tx.amount}")
             await message.nack(requeue=False) # False если баланс недостаточен, отклоняем сообщение. True если баланс не отклоняем сообщение и повторяем попытку
             return
-
-        last = await db.find_one({'$query': {}, '$orderby': {'_id': -1}})
-        last_hash = last['hash'] if last else "0"
-        logger.info(f"Last hash: {last_hash}, This hash: {this_hash}")
-
-        tx.hash = hash_hex(last_hash + this_hash)
-
-        result = await db.insert_tx(tx)
-        if result:
-            logger.info(f"Saved transaction: {dict(tx)}")
+        
+        pool_mom = mom.get(tx.mom)
+        pool_mom_dad = dad.get(tx.mom)
+        pool_dad = dad.get(tx.dad)
+        pool_home_mom = home.get(tx.mom)
+        pool_home_dad = home.get(tx.dad)
+        MOM = False
+        DAD = False
+        if pool_mom or pool_mom_dad or pool_home_mom: MOM = True
+        if pool_dad or pool_home_dad: DAD = True
+        """Если мама и папа найдены добавляем нашу транзу в маму"""
+        if MOM and DAD:
+            t = dict(tx)
+            t["time"] = int(time.time_ns() / 1000)
+            #tx.time = int(time.time() * 1e9)  
+            mom.set(hash, json.dumps(t))
+            mom.set("last", hash)
+            logger.info(f"Pooled transaction: {t}")
+            """Если мама всё ещё в пуле, перемещаем её в папу"""
+            if pool_mom:
+                mom.delete(tx.mom)
+                dad.set(tx.mom, pool_mom)
+                dad.set("last", tx.mom)
+                logger.info(f"Move pool_mom {pool_mom}")
+            """Если мама у папы в пуле, перемещаем её в дом и публикуем"""
+            if pool_mom_dad:
+                dad.delete(tx.mom)
+                home.set(tx.mom, pool_mom_dad)
+                tx = json.loads(pool_mom_dad.decode("utf-8"))
+                tx = TxWrite(**tx)
+                tx.hash = tx.mom
+                result = await db.insert_tx(tx)
+                logger.info(f"Move pool_mom_dad")
+                if result:
+                    logger.info(f"Saved transaction: {dict(tx)}")
+                else:
+                    logger.error("Failed to save transaction")
+            """Если папа всё ещё в пуле, перемещаем его в дом и публикуем"""
+            if pool_dad:
+                dad.delete(tx.dad)
+                home.set(tx.dad, pool_dad)
+                logger.info(f"Move pool_dad")
+                tx = json.loads(pool_dad.decode("utf-8"))
+                tx = TxWrite(**tx)
+                tx.hash = tx.dad
+                result = await db.insert_tx(tx)
+                if result:
+                    logger.info(f"Saved transaction: {dict(tx)}")
+                else:
+                    logger.error("Failed to save transaction")
+            """Если родители дома дольше чем N -> удаляем"""
+            if pool_home_mom:
+                t = json.loads(pool_home_mom.decode("utf-8"))["time"]
+                if now - t > HOME_TIME: home.delete(tx.mom); logger.info(f"Remove pool_home_mom: {pool_home_mom}")
+            if pool_home_dad:
+                t = json.loads(pool_home_dad.decode("utf-8"))["time"]
+                if now - t > HOME_TIME: home.delete(tx.dad); logger.info(f"Remove pool_home_dad: {pool_home_dad}")
             await message.ack()
         else:
-            logger.error("Failed to save transaction")
+            logger.error("No mom & dad in Pool")
             await message.nack(requeue=True)
+
     except Exception as e:
         logger.error(f"Error processing message: {e}")
         await message.nack(requeue=True)
