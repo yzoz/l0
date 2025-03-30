@@ -1,29 +1,47 @@
-from src.models.tx import TxWrite
-from pymongo import MongoClient
+from src.models.tx import TxStore, TxWrite
+import asyncio
+import redis.asyncio as redis
+import json
 import time
+from src.utils.data import hash_hex, ordered_sum
 
-cli = MongoClient('localhost', 27017)
+tx = [TxStore(
+    mom = "",
+    dad = "",
+    debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
+    credit = "",
+    amount = 500000000000000,
+    uniq = "",
+    sign = "",
+    msg = ""
+), TxStore(
+    mom = "",
+    dad = "",
+    debit = "RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR",
+    credit = "",
+    amount = 500000000000000,
+    uniq = "",
+    sign = "",
+    msg = ""
+)]
 
-db = cli.feo
-txs = db.tx
+async def main():
+    for i, t in enumerate(tx):
+        d = dict(t)
+        h = hash_hex(ordered_sum(dict(d)))
+        d["time"] = int(time.time_ns() / 1000)
+        m = json.dumps(dict(d))
+        r = redis.Redis(host='localhost', db=i+1)
+        await r.set(h, m)
+        await r.set("last", h)
+        value = await r.get(h)
+        w = json.loads(value.decode("utf-8"))
+        w = TxWrite(**w)
+        w.hash = h
+        last = await r.get("last")
+        print(last, i, w)
+        #await r.delete(h)
 
-"""
-C8xjbHktooH8Pm1n57hHprfBSb4kxSfTcDS3ZZKBCTCR
-"""
 
-tx = TxWrite(
-        debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
-        credit = "0",
-        amount = 1000000000000000,
-        asset = "0",
-        uniq = "0",
-        sign = "0",
-        v = 1,
-        time = time.time_ns(),
-        hash = "0",
-        msg = ""
-    )
-
-result = txs.insert_one(dict(tx))
-if result.inserted_id:
-    print(dict(tx))
+if __name__ == "__main__":
+    asyncio.run(main())
