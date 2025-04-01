@@ -36,8 +36,8 @@ async def main():
         await r.set("last", h)
         value = await r.get(h)
         w = json.loads(value.decode("utf-8"))
-        w = TxWrite(**w)
-        w.hash = h
+        w["hash"] = h
+        w = TxWrite(**w)  
         last = await r.get("last")
         print(last, i, w)
         #await r.delete(h)

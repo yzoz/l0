@@ -59,12 +59,12 @@ async def on_message(message: IncomingMessage):
         if pool_dad or pool_home_dad: DAD = True
         """Если мама и папа найдены добавляем нашу транзу в маму"""
         if MOM and DAD:
-            t = dict(tx)
-            t["time"] = int(time.time_ns() / 1000)
+            p = dict(tx)
+            p["time"] = int(time.time_ns() / 1000)
             #tx.time = int(time.time() * 1e9)  
-            mom.set(hash, json.dumps(t))
+            mom.set(hash, json.dumps(p))
             mom.set("last", hash)
-            logger.info(f"Pooled transaction: {t}")
+            logger.info(f"Pooled transaction: {p}")
             """Если мама всё ещё в пуле, перемещаем её в папу"""
             if pool_mom:
                 mom.delete(tx.mom)
@@ -75,26 +75,26 @@ async def on_message(message: IncomingMessage):
             if pool_mom_dad:
                 dad.delete(tx.mom)
                 home.set(tx.mom, pool_mom_dad)
-                tx = json.loads(pool_mom_dad.decode("utf-8"))
-                tx = TxWrite(**tx)
-                tx.hash = tx.mom
-                result = await db.insert_tx(tx)
-                logger.info(f"Move pool_mom_dad")
+                logger.info(f"Move pool_mom_dad {tx.mom}")
+                t = json.loads(pool_mom_dad.decode("utf-8"))
+                t["hash"] = tx.mom
+                t = TxWrite(**t)
+                result = await db.insert_tx(t)
                 if result:
-                    logger.info(f"Saved transaction: {dict(tx)}")
+                    logger.info(f"Saved transaction: {dict(t)}")
                 else:
                     logger.error("Failed to save transaction")
             """Если папа всё ещё в пуле, перемещаем его в дом и публикуем"""
             if pool_dad:
                 dad.delete(tx.dad)
                 home.set(tx.dad, pool_dad)
-                logger.info(f"Move pool_dad")
-                tx = json.loads(pool_dad.decode("utf-8"))
-                tx = TxWrite(**tx)
-                tx.hash = tx.dad
-                result = await db.insert_tx(tx)
+                logger.info(f"Move pool_dad {tx.dad}")
+                t = json.loads(pool_dad.decode("utf-8"))
+                t["hash"] = tx.dad
+                t = TxWrite(**t)
+                result = await db.insert_tx(t)
                 if result:
-                    logger.info(f"Saved transaction: {dict(tx)}")
+                    logger.info(f"Saved transaction: {dict(t)}")
                 else:
                     logger.error("Failed to save transaction")
             """Если родители дома дольше чем N -> удаляем"""

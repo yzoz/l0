@@ -32,10 +32,10 @@ class TxWrite(BaseModel):
     amount: int
     uniq: str
     msg: Optional[str] = ""
-    sign: Optional[str] = ""
-    hash: Optional[str] = ""
+    sign: str
+    hash: str
     v: Optional[int] = 1
-    time: Optional[int] = 0
+    time: int
     
 
 class TxSend(BaseModel):
