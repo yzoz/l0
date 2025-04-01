@@ -32,13 +32,13 @@ tx = [TxStore(
 )]
 
 async def main():
-    for i, t in enumerate(tx):
+    r = redis.Redis(host='localhost', db=0)
+    r.flushdb()
+    for t in tx:
         d = dict(t)
         h = hash_hex(ordered_sum(dict(d)))
         d["time"] = int(time.time_ns() / 1000)
         m = json.dumps(dict(d))
-        r = redis.Redis(host='localhost', db=i+1)
-        r.flushdb()
         r.set(h, m)
         value = r.get(h)
         w = json.loads(value.decode("utf-8"))

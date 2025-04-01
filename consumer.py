@@ -20,9 +20,8 @@ HOME_TIME = 300 * 1_000_000
 # Инициализация клиентов
 db = MongoDB()
 rabbitmq = RabbitMQ(host='localhost', queue_name='tx')
-mom = redis.Redis(host='localhost', db=1)
-dad = redis.Redis(host='localhost', db=2)
-home = redis.Redis(host='localhost', db=3)
+pool = redis.Redis(host='localhost', db=0)
+home = redis.Redis(host='localhost', db=1)
 
 async def on_message(message: IncomingMessage):
     logger.info("_" * 80)
@@ -48,33 +47,27 @@ async def on_message(message: IncomingMessage):
             await message.nack(requeue=False) # False если баланс недостаточен, отклоняем сообщение. True если баланс не отклоняем сообщение и повторяем попытку
             return
         
-        pool_mom = mom.get(tx.mom)
-        pool_mom_dad = dad.get(tx.mom)
-        pool_dad = dad.get(tx.dad)
+        pool_mom = pool.get(tx.mom)
+        pool_dad = pool.get(tx.dad)
         pool_home_mom = home.get(tx.mom)
         pool_home_dad = home.get(tx.dad)
         MOM = False
         DAD = False
-        if pool_mom or pool_mom_dad or pool_home_mom: MOM = True
+        if pool_mom or pool_home_mom: MOM = True
         if pool_dad or pool_home_dad: DAD = True
-        """Если мама и папа найдены добавляем нашу транзу в маму"""
+        """Если мама и папа найдены добавляем нашу транзу в пул"""
         if MOM and DAD:
             p = dict(tx)
             p["time"] = int(time.time_ns() / 1000)
-            #tx.time = int(time.time() * 1e9)  
-            mom.set(hash, json.dumps(p))
+            #tx.time = int(time.time() * 1e9)
+            pool.set(hash, json.dumps(p))
             logger.info(f"Pooled transaction: {p}")
-            """Если мама всё ещё в пуле, перемещаем её в папу"""
+            """Если мама всё ещё в пуле, перемещаем её в дом и публикуем"""
             if pool_mom:
-                mom.delete(tx.mom)
-                dad.set(tx.mom, pool_mom)
-                logger.info(f"Move pool_mom {pool_mom}")
-            """Если мама у папы в пуле, перемещаем её в дом и публикуем"""
-            if pool_mom_dad:
-                dad.delete(tx.mom)
-                home.set(tx.mom, pool_mom_dad)
-                logger.info(f"Move pool_mom_dad {tx.mom}")
-                t = json.loads(pool_mom_dad.decode("utf-8"))
+                pool.delete(tx.mom)
+                home.set(tx.mom, pool_mom)
+                logger.info(f"Move pool_mom {tx.mom}")
+                t = json.loads(pool_mom.decode("utf-8"))
                 t["hash"] = tx.mom
                 t = TxWrite(**t)
                 result = await db.insert_tx(t)
@@ -84,7 +77,7 @@ async def on_message(message: IncomingMessage):
                     logger.error("Failed to save transaction")
             """Если папа всё ещё в пуле, перемещаем его в дом и публикуем"""
             if pool_dad:
-                dad.delete(tx.dad)
+                pool.delete(tx.dad)
                 home.set(tx.dad, pool_dad)
                 logger.info(f"Move pool_dad {tx.dad}")
                 t = json.loads(pool_dad.decode("utf-8"))
