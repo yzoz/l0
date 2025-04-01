@@ -33,13 +33,11 @@ async def main():
         m = json.dumps(dict(d))
         r = redis.Redis(host='localhost', db=i+1)
         await r.set(h, m)
-        await r.set("last", h)
         value = await r.get(h)
         w = json.loads(value.decode("utf-8"))
         w["hash"] = h
         w = TxWrite(**w)  
-        last = await r.get("last")
-        print(last, i, w)
+        print(w)
         #await r.delete(h)
 
 

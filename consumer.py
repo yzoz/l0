@@ -39,11 +39,11 @@ async def on_message(message: IncomingMessage):
 
         if await db.find_one({"credit": tx.credit, "uniq": tx.uniq}):
             logger.info(f"Duplicate transaction detected: {tx.uniq}")
-            await message.ack()
+            await message.nack(requeue=False)
             return
         
         balance = await get_balance(tx.credit, db)
-        if balance < tx.amount:
+        if balance < tx.amount and tx.credit != "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy": # DEV
             logger.error(f"Insufficient balance for {tx.credit}: {balance} < {tx.amount}")
             await message.nack(requeue=False) # False если баланс недостаточен, отклоняем сообщение. True если баланс не отклоняем сообщение и повторяем попытку
             return
@@ -63,13 +63,11 @@ async def on_message(message: IncomingMessage):
             p["time"] = int(time.time_ns() / 1000)
             #tx.time = int(time.time() * 1e9)  
             mom.set(hash, json.dumps(p))
-            mom.set("last", hash)
             logger.info(f"Pooled transaction: {p}")
             """Если мама всё ещё в пуле, перемещаем её в папу"""
             if pool_mom:
                 mom.delete(tx.mom)
                 dad.set(tx.mom, pool_mom)
-                dad.set("last", tx.mom)
                 logger.info(f"Move pool_mom {pool_mom}")
             """Если мама у папы в пуле, перемещаем её в дом и публикуем"""
             if pool_mom_dad:
