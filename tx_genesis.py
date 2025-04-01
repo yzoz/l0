@@ -33,7 +33,7 @@ tx = [TxStore(
 
 async def main():
     r = redis.Redis(host='localhost', db=0)
-    r.flushdb()
+    r.flushall()
     for t in tx:
         d = dict(t)
         h = hash_hex(ordered_sum(dict(d)))

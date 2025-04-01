@@ -89,12 +89,12 @@ async def on_message(message: IncomingMessage):
                 else:
                     logger.error("Failed to save transaction")
             """Если родители дома дольше чем N -> удаляем"""
-            if pool_home_mom:
+            """if pool_home_mom:
                 t = json.loads(pool_home_mom.decode("utf-8"))["time"]
                 if now - t > HOME_TIME: home.delete(tx.mom); logger.info(f"Remove pool_home_mom: {pool_home_mom}")
             if pool_home_dad:
                 t = json.loads(pool_home_dad.decode("utf-8"))["time"]
-                if now - t > HOME_TIME: home.delete(tx.dad); logger.info(f"Remove pool_home_dad: {pool_home_dad}")
+                if now - t > HOME_TIME: home.delete(tx.dad); logger.info(f"Remove pool_home_dad: {pool_home_dad}")"""
             await message.ack()
         else:
             logger.error("No mom & dad in Pool")
