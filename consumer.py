@@ -49,14 +49,18 @@ async def on_message(message: IncomingMessage):
         
         pool_mom = pool.get(tx.mom)
         pool_dad = pool.get(tx.dad)
+        pool_bro = pool.get(tx.bro)
         pool_home_mom = home.get(tx.mom)
         pool_home_dad = home.get(tx.dad)
+        pool_home_bro = home.get(tx.bro)
         MOM = False
         DAD = False
+        BRO = False
         if pool_mom or pool_home_mom: MOM = True
         if pool_dad or pool_home_dad: DAD = True
+        if pool_bro or pool_home_bro: BRO = True
         """Если мама и папа найдены добавляем нашу транзу в пул"""
-        if MOM and DAD:
+        if MOM and DAD and BRO:
             p = dict(tx)
             p["time"] = int(time.time_ns() / 1000)
             #tx.time = int(time.time() * 1e9)
@@ -88,6 +92,18 @@ async def on_message(message: IncomingMessage):
                     logger.info(f"Saved transaction: {dict(t)}")
                 else:
                     logger.error("Failed to save transaction")
+            if pool_bro:
+                pool.delete(tx.bro)
+                home.set(tx.bro, pool_bro)
+                logger.info(f"Move pool_bro {tx.bro}")
+                t = json.loads(pool_bro.decode("utf-8"))
+                t["hash"] = tx.bro
+                t = TxWrite(**t)
+                result = await db.insert_tx(t)
+                if result:
+                    logger.info(f"Saved transaction: {dict(t)}")
+                else:
+                    logger.error("Failed to save transaction")
             """Если родители дома дольше чем N -> удаляем"""
             """if pool_home_mom:
                 t = json.loads(pool_home_mom.decode("utf-8"))["time"]
@@ -97,12 +113,12 @@ async def on_message(message: IncomingMessage):
                 if now - t > HOME_TIME: home.delete(tx.dad); logger.info(f"Remove pool_home_dad: {pool_home_dad}")"""
             await message.ack()
         else:
-            logger.error("No mom & dad in Pool")
+            logger.error(f"No mom & dad in Pool: {dict(t)}")
             await message.nack(requeue=False)
 
     except Exception as e:
         logger.error(f"Error processing message: {e}")
-        await message.nack(requeue=True)
+        await message.nack(requeue=False) #requeue=True
 
 async def main():
     """Основная функция для запуска consumer'а."""

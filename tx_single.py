@@ -30,6 +30,7 @@ async def main():
     c = Tx(
         mom = p["mom"],
         dad = p["dad"],
+        bro = p["bro"],
         debit = pk[4],
         credit = pk[3],
         amount = random.randint(1, 1000000000),
