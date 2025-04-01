@@ -14,16 +14,28 @@ txs.drop()
 tx = [TxStore(
     mom = "",
     dad = "",
+    bro = "",
     debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
     credit = "",
-    amount = 500000000000000,
+    amount = 250000000000000,
     uniq = "",
     sign = "",
     msg = ""
 ), TxStore(
     mom = "",
     dad = "",
-    debit = "RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR",
+    bro = "",
+    debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
+    credit = "",
+    amount = 330000000000000,
+    uniq = "",
+    sign = "",
+    msg = ""
+), TxStore(
+    mom = "",
+    dad = "",
+    bro = "",
+    debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
     credit = "",
     amount = 500000000000000,
     uniq = "",
