@@ -1,9 +1,15 @@
 from src.models.tx import TxStore, TxWrite
 import asyncio
-import redis.asyncio as redis
+import redis
 import json
 import time
 from src.utils.data import hash_hex, ordered_sum
+from pymongo import MongoClient
+cli = MongoClient('localhost', 27017)
+
+db = cli.feo
+txs = db.tx
+txs.drop()
 
 tx = [TxStore(
     mom = "",
@@ -32,8 +38,9 @@ async def main():
         d["time"] = int(time.time_ns() / 1000)
         m = json.dumps(dict(d))
         r = redis.Redis(host='localhost', db=i+1)
-        await r.set(h, m)
-        value = await r.get(h)
+        r.flushdb()
+        r.set(h, m)
+        value = r.get(h)
         w = json.loads(value.decode("utf-8"))
         w["hash"] = h
         w = TxWrite(**w)  
