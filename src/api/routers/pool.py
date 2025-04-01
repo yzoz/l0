@@ -20,7 +20,7 @@ async def pool(pool = Depends(get_pool), home = Depends(get_home)):
             pool_list.append(key.decode('utf-8'))
         if cursor == 0:
             break
-    if len(pool_list) < 3:
+    if len(pool_list) < 2:
         while True:
             cursor, keys = await home.scan(cursor=cursor, count=100)
             for key in keys:
@@ -30,7 +30,6 @@ async def pool(pool = Depends(get_pool), home = Depends(get_home)):
     while True:
         mom = random.randint(0, len(pool_list) - 1)
         dad = random.randint(0, len(pool_list) - 1)
-        bro = random.randint(0, len(pool_list) - 1)
-        variables = [mom, dad, bro]
+        variables = [mom, dad]
         if len(set(variables)) == len(variables): break
-    return {"mom": pool_list[mom], "dad": pool_list[dad], "bro": pool_list[bro]}
+    return {"mom": pool_list[mom], "dad": pool_list[dad]}

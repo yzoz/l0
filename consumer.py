@@ -49,18 +49,14 @@ async def on_message(message: IncomingMessage):
         
         pool_mom = pool.get(tx.mom)
         pool_dad = pool.get(tx.dad)
-        pool_bro = pool.get(tx.bro)
         pool_home_mom = home.get(tx.mom)
         pool_home_dad = home.get(tx.dad)
-        pool_home_bro = home.get(tx.bro)
         MOM = False
         DAD = False
-        BRO = False
         if pool_mom or pool_home_mom: MOM = True
         if pool_dad or pool_home_dad: DAD = True
-        if pool_bro or pool_home_bro: BRO = True
         """Если мама и папа найдены добавляем нашу транзу в пул"""
-        if MOM and DAD and BRO:
+        if MOM and DAD:
             p = dict(tx)
             p["time"] = int(time.time_ns() / 1000)
             #tx.time = int(time.time() * 1e9)
@@ -86,18 +82,6 @@ async def on_message(message: IncomingMessage):
                 logger.info(f"Move pool_dad {tx.dad}")
                 t = json.loads(pool_dad.decode("utf-8"))
                 t["hash"] = tx.dad
-                t = TxWrite(**t)
-                result = await db.insert_tx(t)
-                if result:
-                    logger.info(f"Saved transaction: {dict(t)}")
-                else:
-                    logger.error("Failed to save transaction")
-            if pool_bro:
-                pool.delete(tx.bro)
-                home.set(tx.bro, pool_bro)
-                logger.info(f"Move pool_bro {tx.bro}")
-                t = json.loads(pool_bro.decode("utf-8"))
-                t["hash"] = tx.bro
                 t = TxWrite(**t)
                 result = await db.insert_tx(t)
                 if result:

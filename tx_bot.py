@@ -54,7 +54,6 @@ async def send(in_set):
         c = Tx(
             mom = p["mom"],
             dad = p["dad"],
-            bro = p["bro"],
             debit = d,
             credit = c,
             amount = a,

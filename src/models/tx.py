@@ -4,7 +4,6 @@ from pydantic import BaseModel, PositiveInt
 class Tx(BaseModel):
     mom: str
     dad: str
-    bro: str
     credit: str
     debit: str
     amount: PositiveInt
@@ -18,7 +17,6 @@ class TxRead(BaseModel):
 class TxStore(BaseModel):
     mom: str
     dad: str
-    bro: str
     credit: str
     debit: str
     amount: int
@@ -29,7 +27,6 @@ class TxStore(BaseModel):
 class TxWrite(BaseModel):
     mom: str
     dad: str
-    bro: str
     credit: str
     debit: str
     amount: int
@@ -44,7 +41,6 @@ class TxWrite(BaseModel):
 class TxSend(BaseModel):
     credit: str
     debit: str
-    bro: str
     amount: float
     uniq: str
     sign: str
