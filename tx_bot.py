@@ -76,7 +76,7 @@ async def send(in_set):
 async def main():
     """Основная функция для запуска генератора транзакций."""
     in_set = input("Enter the number of transactions to send: ")
-    await asyncio.gather(*[send(in_set) for _ in range(1)])
+    await asyncio.gather(*[send(in_set) for _ in range(2)])
 
 if __name__ == "__main__":
     try:
