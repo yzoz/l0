@@ -107,7 +107,7 @@ async def on_message(message: IncomingMessage):
             await message.ack()
         else:
             logger.error("No mom & dad in Pool")
-            await message.nack(requeue=True)
+            await message.nack(requeue=False)
 
     except Exception as e:
         logger.error(f"Error processing message: {e}")
