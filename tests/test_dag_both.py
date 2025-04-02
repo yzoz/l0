@@ -30,7 +30,7 @@ pipeline = [
             "connectToField": "mom",
             "as": "descendants_mom",
             "depthField": "level_mom",
-            "maxDepth": 5
+            "maxDepth": 100
         }
     },
     {
@@ -41,7 +41,7 @@ pipeline = [
             "connectToField": "dad",
             "as": "descendants_dad",
             "depthField": "level_dad",
-            "maxDepth": 5
+            "maxDepth": 100
         }
     },
     {
@@ -88,16 +88,16 @@ for descendant in result.get("descendants", []):
         level = 0
     G.add_node(child, amount=descendant["amount"], credit=descendant["credit"], level=level)
     #print(child[:6], "N", G.nodes[child])
-    if mom and mom in G.nodes:
+    """if mom and mom in G.nodes:
         G.add_edge(mom, child, relation="mom")
         #print(child[:6], mom[:6], "M", G.nodes[mom])
     if dad and dad in G.nodes:
         G.add_edge(dad, child, relation="dad")
-        #print(child[:6], dad[:6], "D", G.nodes[dad])
-    if mom and mom:
+        #print(child[:6], dad[:6], "D", G.nodes[dad])"""
+    if mom:
         G.add_edge(mom, child, relation="mom")
         #print(child[:6], mom[:6], "M", G.nodes[mom])
-    if dad and dad:
+    if dad:
         G.add_edge(dad, child, relation="dad")
         #print(child[:6], dad[:6], "D", G.nodes[dad])
 
@@ -129,12 +129,19 @@ for descendant in result.get("descendants", []):
         G.add_edge(dad, child)
     """
 
-"""
-print("Узлы:", G.nodes(data=True))
-print("Рёбра:", G.edges())
-"""
-"""for g in G.nodes:
-    print(G.nodes[g])"""
+print("Узлы:", len(G.nodes))
+print("Рёбра:", len(G.edges))
+#print(G.edges(data=True))
+
+nodes_to_remove = []    
+for node in G.nodes:
+    if G.nodes[node] == {}:
+        nodes_to_remove.append(node)
+for node in nodes_to_remove:
+    G.remove_node(node)
+for node in G.nodes:
+    print(G.nodes[node])
+print(len(nodes_to_remove))
 # Инициализация pyvis
 net = Network(height="1500px", width="100%", directed=True, notebook=False)  # Увеличиваем высоту
 net.from_nx(G)

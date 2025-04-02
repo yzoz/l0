@@ -28,6 +28,8 @@ class TransactionConfig:
     """Конфигурация параметров транзакций"""
     # Специальный адрес разработчика для обхода проверки баланса
     DEV_ADDRESS: str = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy"
+    CLEAR: int = 10
+    CONFIRM: int = 3
 
 class RedisClients:
     """Класс для управления подключениями к различным базам Redis"""
@@ -38,16 +40,18 @@ class RedisClients:
         self.home: Optional[redis.Redis] = None
         # Клиент для хранения балансов
         self.balance: Optional[redis.Redis] = None
+        self.refs: Optional[redis.Redis] = None
 
     async def connect(self) -> None:
         """Устанавливает соединения с тремя базами Redis"""
         self.pool = await redis.Redis(host='localhost', db=0)  # База для пула
-        self.home = await redis.Redis(host='localhost', db=1)  # База для home
-        self.balance = await redis.Redis(host='localhost', db=2)  # База для балансов
+        self.refs = await redis.Redis(host='localhost', db=1)  # База для ссылок
+        self.home = await redis.Redis(host='localhost', db=2)  # База для home
+        self.balance = await redis.Redis(host='localhost', db=3)  # База для балансов
 
     async def close(self) -> None:
         """Закрывает все открытые соединения с Redis"""
-        for client in (self.pool, self.home, self.balance):
+        for client in (self.pool, self.home, self.balance, self.refs):
             if client:  # Проверяем, что клиент существует
                 await client.aclose()
 
@@ -58,10 +62,12 @@ class TransactionProcessor:
         self.rabbitmq = rabbitmq  # Очередь RabbitMQ
         self.redis = redis_clients  # Клиенты Redis
         self.config = TransactionConfig()  # Конфигурация транзакций
+        self.count = 0
 
     async def process_message(self, message: IncomingMessage) -> None:
         """Обрабатывает входящее сообщение из RabbitMQ"""
         logger.info(f"{'_' * 80}\nNew message received")  # Разделитель в логах
+        self.count += 1
         try:
             tx = self.parse_message(message)  # Парсим сообщение в объект
             await self.process_transaction(tx, message)  # Обрабатываем транзакцию
@@ -74,6 +80,8 @@ class TransactionProcessor:
         except Exception as e:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
             await message.nack(requeue=False)
+        if self.count % self.config.CLEAR == 0:
+            await self.check_pool()
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
         """Преобразует сырые данные сообщения в объект TxStore"""
@@ -144,6 +152,8 @@ class TransactionProcessor:
 
         # Сохраняем транзакцию в пул
         await self.redis.pool.set(tx_hash, json.dumps(tx_data))
+        await self.redis.pool.zadd("unconfirmed", {tx_hash: 0})
+        await self.redis.refs.set(tx_hash, "0")
         # Увеличиваем баланс получателя
         await self.redis.balance.incr(tx.debit, amount=tx.amount)
         # Уменьшаем баланс отправителя
@@ -155,17 +165,24 @@ class TransactionProcessor:
         await self.handle_parent(tx.dad)
 
     async def handle_parent(self, parent_hash: str) -> None:
-        """Перемещает родителя из пула в home и сохраняет в базу"""
-        parent_data = await self.redis.pool.get(parent_hash)  # Проверяем пул
-        if parent_data:  # Если родитель найден
-            await self.redis.pool.delete(parent_hash)  # Удаляем из пула
-            await self.redis.home.set(parent_hash, parent_data)  # Добавляем в home
-            logger.info(f"Parent moved to home: {parent_hash}")
+        await self.redis.refs.incr(parent_hash)
+        await self.redis.pool.zincrby("unconfirmed", 1, parent_hash)
 
-            # Создаем и сохраняем транзакцию в базе
-            parent_tx = self.create_parent_tx(parent_hash, parent_data)
-            success = await self.db.insert_tx(parent_tx)
-            logger.info(f"Parent saved: {parent_hash}" if success else f"Failed to save: {parent_hash}")
+    async def confirm_tx(self, tx_hash: str) -> bool:
+        refs = int(await self.redis.refs.get(tx_hash) or 0)
+        if refs >= self.config.CONFIRM:
+            tx_data = await self.redis.pool.get(tx_hash)
+            if tx_data:
+                # Создаем и сохраняем транзакцию в базе
+                parent_tx = self.create_parent_tx(tx_hash, tx_data)
+                success = await self.db.insert_tx(parent_tx)
+                logger.info(f"Parent saved: {tx_hash}" if success else f"Failed to save: {tx_hash}")
+                await self.redis.pool.zrem("unconfirmed", tx_hash)
+                await self.redis.pool.delete(tx_hash)
+                await self.redis.refs.delete(tx_hash)
+                await self.redis.home.set(tx_hash, tx_data)
+                return True
+        return False
 
     def create_parent_tx(self, hash: str, data: bytes) -> TxWrite:
         """Создает объект TxWrite для родительской транзакции"""
@@ -176,6 +193,12 @@ class TransactionProcessor:
         except (json.JSONDecodeError, TypeError) as e:
             logger.error(f"Failed to parse parent data for {hash}: {e}")
             raise  # Или вернуть None и обработать выше
+
+    # Периодическая проверка пула
+    async def check_pool(self):
+        tx_hashes = await self.redis.pool.zrange("unconfirmed", 0, -1)
+        for tx_hash in tx_hashes:
+            await self.confirm_tx(tx_hash.decode())
 
 class TransactionService:
     """Основной сервис для обработки транзакций"""
