@@ -87,13 +87,19 @@ for descendant in result.get("descendants", []):
     if level == float("inf"):
         level = 0
     G.add_node(child, amount=descendant["amount"], credit=descendant["credit"], level=level)
-    print(child[:6], "N", G.nodes[child])
+    #print(child[:6], "N", G.nodes[child])
     if mom and mom in G.nodes:
         G.add_edge(mom, child, relation="mom")
-        print(child[:6], mom[:6], "M", G.nodes[mom])
+        #print(child[:6], mom[:6], "M", G.nodes[mom])
     if dad and dad in G.nodes:
         G.add_edge(dad, child, relation="dad")
-        print(child[:6], dad[:6], "D", G.nodes[dad])
+        #print(child[:6], dad[:6], "D", G.nodes[dad])
+    if mom and mom:
+        G.add_edge(mom, child, relation="mom")
+        #print(child[:6], mom[:6], "M", G.nodes[mom])
+    if dad and dad:
+        G.add_edge(dad, child, relation="dad")
+        #print(child[:6], dad[:6], "D", G.nodes[dad])
 
     """
         # Вычисляем уровень
