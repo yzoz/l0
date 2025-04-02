@@ -1,14 +1,13 @@
 import asyncio
-import json
-import time
-import random
-import logging
 import httpx
-from nacl.signing import SigningKey
-import base58
+from src.models.tx import Tx
 import uuid
+import random
 from src.utils.data import ordered_sum
-from hashlib import sha512
+from src.utils.crypto import sign_message
+import json
+import logging
+
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -49,24 +48,23 @@ async def send(in_set):
         a = random.randint(1, 1000000000)  # сумма
         u = str(uuid.uuid4())  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
+        p = await client.get('http://127.0.0.1:8000/pool')
+        p = p.json()
         # Формируем транзакцию
-        c = {
-            'credit': c,
-            'debit': d,
-            'amount': a,
-            'asset': "0",
-            'uniq': u,
-            'msg': m
-        }
-        h = ordered_sum(c)  # строка для подписи
+        c = Tx(
+            mom = p["mom"],
+            dad = p["dad"],
+            debit = d,
+            credit = c,
+            amount = a,
+            uniq = u,
+            msg = m
+        )
+        m = ordered_sum(dict(c))  # строка для подписи
         # Подпись транзакции
-        priv = base58.b58decode(priv)
-        signing_key = SigningKey(priv)
-        message_bytes = sha512(h.encode("utf-8")).digest()
-        signed = base58.b58encode(signing_key.sign(message_bytes))
-        s = signed.decode("utf-8")
+        s = sign_message(priv, m)
         tx = {
-            "content": c,
+            "content": dict(c),
             "sign": s
         }
         logger.info(f"Sending transaction: {json.dumps(tx, indent=2)}")
@@ -78,7 +76,7 @@ async def send(in_set):
 async def main():
     """Основная функция для запуска генератора транзакций."""
     in_set = input("Enter the number of transactions to send: ")
-    await asyncio.gather(*[send(in_set) for _ in range(50)])
+    await asyncio.gather(*[send(in_set) for _ in range(2)])
 
 if __name__ == "__main__":
     try:
