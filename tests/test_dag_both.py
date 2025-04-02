@@ -10,7 +10,7 @@ tx = db.tx
 
 pipeline = [
     {
-        "$match": {"hash": "a2efb96d5f53d1d8fe185e9abda6a1c802719008991cb06e5bcfcff5c69d1e08db5841bd70ae3d7fee972cb6bb2dcb2dd47ed1798efb005413451be91ae04ac2"}  # Находим стартовую транзакцию
+        "$match": {"hash": "b3bd81a43ff3303c421303c43839292f69456ee70fc5918092263372183ced93c760703a97d17f76c14d40f0eea65ccfe4993f39aff0c2ca0ce7f32399ed4e49"}  # Находим стартовую транзакцию
     },
     {
         "$project": {  # Создаём массив родителей
@@ -30,7 +30,7 @@ pipeline = [
             "connectToField": "mom",
             "as": "descendants_mom",
             "depthField": "level_mom",
-            "maxDepth": 10
+            "maxDepth": 2
         }
     },
     {
@@ -41,7 +41,7 @@ pipeline = [
             "connectToField": "dad",
             "as": "descendants_dad",
             "depthField": "level_dad",
-            "maxDepth": 10
+            "maxDepth": 2
         }
     },
     {
@@ -71,9 +71,13 @@ G.add_node("1", amount=1, credit=1, level=0)
 levels = {"1": 0}  # Инициализируем корень
 
 # Добавляем потомков и рёбра
-
+seen_hashes = []
 for descendant in result.get("descendants", []):
     child = descendant["hash"]
+    #print(child)
+    """if child in seen_hashes:
+        continue  # Пропускаем дубликаты"""
+    seen_hashes.append(child)
     mom = descendant["mom"]
     dad = descendant["dad"]
     # Вычисляем уровень на основе родителей
@@ -83,8 +87,8 @@ for descendant in result.get("descendants", []):
     )
     if level == float("inf"):
         level = 0
-    print(child, mom, dad)
     G.add_node(child, amount=descendant["amount"], credit=descendant["credit"], level=level)
+    print(child[:6], "N", G.nodes[child])
     """level = float("inf")
     if mom and mom in levels:
         level = min(level, levels[mom] + 1)
@@ -97,21 +101,22 @@ for descendant in result.get("descendants", []):
     G.add_node(child, amount=descendant["amount"], credit=descendant["credit"], level=level)"""
     if mom:
         G.add_edge(mom, child)
+        print(child[:6], mom[:6], "M", G.nodes[mom])
     if dad:
         G.add_edge(dad, child)
-
+        print(child[:6], dad[:6], "D", G.nodes[dad])
+print(len(G.nodes))
 """for g in G.nodes:
     print(G.nodes[g])"""
 # Инициализация pyvis
-"""net = Network(height="1500px", width="100%", directed=True, notebook=False)  # Увеличиваем высоту
+net = Network(height="1500px", width="100%", directed=True, notebook=False)  # Увеличиваем высоту
 net.from_nx(G)
 
 # Настройка узлов с читаемыми именами
-print(len(net.nodes))
-i = 1
+"""print(len(net.nodes))
 for node in net.nodes:
     print(node)
-    print("-" * 10)
+    print("-" * 10)"""
 for node in net.nodes:
     full_hash = node["id"]
     #print(G.nodes[node["id"]])
@@ -127,9 +132,8 @@ for node in net.nodes:
     readable_label = f"{short_credit} ({amount})"
     node["title"] = f"Hash: {full_hash}<br>Amount: {amount}<br>Level: {level}"
     node["label"] = readable_label
-    node["size"] = max(10, min(amount / 10, 30))
-    node["color"] = ["#97c2fc", "#ffb6c1", "#98fb98", "#dda0dd", "#f08080", "#20b2aa", 
-                     "#ffdead", "#87cefa", "#ff69b4", "#9acd32"][level % 10]  # Больше цветов для уровней
+    #node["size"] = max(10, min(amount / 10, 30))
+    #node["color"] = ["#97c2fc", "#ffb6c1", "#98fb98", "#dda0dd", "#f08080", "#20b2aa", "#ffdead", "#87cefa", "#ff69b4", "#9acd32"][level % 10]  # Больше цветов для уровней
     #print(node)
     #print("_" * 10)
 
@@ -159,8 +163,7 @@ options = {
 net.set_options(json.dumps(options))
 
 # Сохранение и отображение
-net.save_graph("transaction_graph.html")"""
-
+net.save_graph("transaction_graph.html")
 
 """
 options = {
