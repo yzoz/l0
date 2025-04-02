@@ -30,7 +30,7 @@ pipeline = [
             "connectToField": "mom",
             "as": "descendants_mom",
             "depthField": "level_mom",
-            "maxDepth": 2
+            "maxDepth": 5
         }
     },
     {
@@ -41,7 +41,7 @@ pipeline = [
             "connectToField": "dad",
             "as": "descendants_dad",
             "depthField": "level_dad",
-            "maxDepth": 2
+            "maxDepth": 5
         }
     },
     {
@@ -66,18 +66,17 @@ print(f"Найдено потомков: {len(result.get('descendants', []))}")
     print(json.dumps(doc, indent=2, default=str))"""
 
 G = nx.DiGraph()
-G.add_node("1", amount=1, credit=1, level=0)
+#G.add_node("1", amount=1, credit="123456789", level=0)
 
 levels = {"1": 0}  # Инициализируем корень
 
 # Добавляем потомков и рёбра
-seen_hashes = []
 for descendant in result.get("descendants", []):
     child = descendant["hash"]
     #print(child)
     """if child in seen_hashes:
         continue  # Пропускаем дубликаты"""
-    seen_hashes.append(child)
+    #seen_hashes.append(child)
     mom = descendant["mom"]
     dad = descendant["dad"]
     # Вычисляем уровень на основе родителей
@@ -89,23 +88,45 @@ for descendant in result.get("descendants", []):
         level = 0
     G.add_node(child, amount=descendant["amount"], credit=descendant["credit"], level=level)
     print(child[:6], "N", G.nodes[child])
-    """level = float("inf")
-    if mom and mom in levels:
-        level = min(level, levels[mom] + 1)
-    if dad and dad in levels:
-        level = min(level, levels[dad] + 1)
+    if mom and mom in G.nodes:
+        G.add_edge(mom, child, relation="mom")
+        print(child[:6], mom[:6], "M", G.nodes[mom])
+    if dad and dad in G.nodes:
+        G.add_edge(dad, child, relation="dad")
+        print(child[:6], dad[:6], "D", G.nodes[dad])
+
+    """
+        # Вычисляем уровень
+    level = descendant.get("level", float("inf"))
     if level == float("inf"):
-        level = 0  # Если нет родителей в графе, уровень 0 (хотя это редкий случай)
+        if mom and mom in levels:
+            level = min(level, levels[mom] + 1)
+        if dad and dad in levels:
+            level = min(level, levels[dad] + 1)
+        if level == float("inf"):
+            level = 0
     
     levels[child] = level
-    G.add_node(child, amount=descendant["amount"], credit=descendant["credit"], level=level)"""
+    G.add_node(child, amount=descendant["amount"], credit=descendant["credit"], level=level)
+    
+    # Добавляем родителей, если их нет в графе
+    if mom and mom not in G.nodes:
+        G.add_node(mom, amount=None, credit="unknown", level=levels[child] - 1)
+        levels[mom] = levels[child] - 1
     if mom:
         G.add_edge(mom, child)
-        print(child[:6], mom[:6], "M", G.nodes[mom])
+        
+    if dad and dad not in G.nodes:
+        G.add_node(dad, amount=None, credit="unknown", level=levels[child] - 1)
+        levels[dad] = levels[child] - 1
     if dad:
         G.add_edge(dad, child)
-        print(child[:6], dad[:6], "D", G.nodes[dad])
-print(len(G.nodes))
+    """
+
+"""
+print("Узлы:", G.nodes(data=True))
+print("Рёбра:", G.edges())
+"""
 """for g in G.nodes:
     print(G.nodes[g])"""
 # Инициализация pyvis
@@ -133,9 +154,19 @@ for node in net.nodes:
     node["title"] = f"Hash: {full_hash}<br>Amount: {amount}<br>Level: {level}"
     node["label"] = readable_label
     #node["size"] = max(10, min(amount / 10, 30))
-    #node["color"] = ["#97c2fc", "#ffb6c1", "#98fb98", "#dda0dd", "#f08080", "#20b2aa", "#ffdead", "#87cefa", "#ff69b4", "#9acd32"][level % 10]  # Больше цветов для уровней
+    node["color"] = ["#97c2fc", "#ffb6c1", "#98fb98", "#dda0dd", "#f08080", "#20b2aa", "#ffdead", "#87cefa", "#ff69b4", "#9acd32"][level % 10]  # Больше цветов для уровней
     #print(node)
     #print("_" * 10)
+
+# Настройка рёбер
+for edge in net.edges:
+    relation = G.edges[(edge["from"], edge["to"])].get("relation")
+    if relation == "mom":
+        edge["color"] = "#0000FF"  # Синий для mom
+        edge["title"] = "Parent: mom"
+    elif relation == "dad":
+        edge["color"] = "#FF0000"  # Красный для dad
+        edge["title"] = "Parent: dad"
 
 # Настройки для глубокого графа
 options = {
