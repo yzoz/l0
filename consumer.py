@@ -2,86 +2,265 @@ import asyncio
 import json
 import time
 import logging
+from dataclasses import dataclass
+from typing import Optional
 from aio_pika import IncomingMessage
 from src.database.queues import RabbitMQ
 from src.database.mongodb import MongoDB
-from src.models.tx import TxWrite
+from src.models.tx import TxStore, TxWrite
 from src.utils.data import hash_hex, ordered_sum
-from src.utils.balance import get_balance  # Импортируем функцию
+from src.utils.balance import get_balance
+import redis.asyncio as redis
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import os
+import sys
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
+# Настройка логирования с красивым форматом вывода
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Инициализация клиентов
-db = MongoDB()
-rabbitmq = RabbitMQ(host='localhost', queue_name='tx')
+@dataclass(frozen=True)
+class TransactionConfig:
+    """Конфигурация параметров транзакций"""
+    # Специальный адрес разработчика для обхода проверки баланса
+    DEV_ADDRESS: str = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy"
 
-async def on_message(message: IncomingMessage):
-    """Обработка входящего сообщения."""
-    try:
-        tx_data = message.body.decode("utf-8")
-        tx_dict = json.loads(tx_data)
-        tx = tx_dict["content"]
-        tx['sign'] = tx_dict["sign"]
-        m = ordered_sum(tx)
-        this_hash = hash_hex(m)
-        tx = TxWrite(**tx)
-        #tx.time = int(time.time() * 1e9)
-        tx.time = time.time_ns()
-        tx.v = 1
+class RedisClients:
+    """Класс для управления подключениями к различным базам Redis"""
+    def __init__(self):
+        # Клиент для пула транзакций
+        self.pool: Optional[redis.Redis] = None
+        # Клиент для "дома" транзакций
+        self.home: Optional[redis.Redis] = None
+        # Клиент для хранения балансов
+        self.balance: Optional[redis.Redis] = None
 
-        if await db.find_one({"credit": tx.credit, "uniq": tx.uniq}):
-            logger.info(f"Duplicate transaction detected: {tx.uniq}")
-            await message.ack()
-            return
+    async def connect(self) -> None:
+        """Устанавливает соединения с тремя базами Redis"""
+        self.pool = await redis.Redis(host='localhost', db=0)  # База для пула
+        self.home = await redis.Redis(host='localhost', db=1)  # База для home
+        self.balance = await redis.Redis(host='localhost', db=2)  # База для балансов
 
-        # Проверка баланса отправителя
-        balance = await get_balance(tx.credit, db)
-        if balance < tx.amount:
-            logger.error(f"Insufficient balance for {tx.credit}: {balance} < {tx.amount}")
-            await message.nack(requeue=False) # False если баланс недостаточен, отклоняем сообщение. True если баланс не отклоняем сообщение и повторяем попытку
-            return
+    async def close(self) -> None:
+        """Закрывает все открытые соединения с Redis"""
+        for client in (self.pool, self.home, self.balance):
+            if client:  # Проверяем, что клиент существует
+                await client.aclose()
 
-        last = await db.find_one({'$query': {}, '$orderby': {'_id': -1}})
-        last_hash = last['hash'] if last else "0"
-        logger.info(f"Last hash: {last_hash}, This hash: {this_hash}")
+class TransactionProcessor:
+    """Класс, отвечающий за обработку транзакций"""
+    def __init__(self, db: MongoDB, rabbitmq: RabbitMQ, redis_clients: RedisClients):
+        self.db = db  # База данных MongoDB
+        self.rabbitmq = rabbitmq  # Очередь RabbitMQ
+        self.redis = redis_clients  # Клиенты Redis
+        self.config = TransactionConfig()  # Конфигурация транзакций
 
-        tx.hash = hash_hex(last_hash + this_hash)
+    async def process_message(self, message: IncomingMessage) -> None:
+        """Обрабатывает входящее сообщение из RabbitMQ"""
+        logger.info(f"{'_' * 80}\nNew message received")  # Разделитель в логах
+        try:
+            tx = self.parse_message(message)  # Парсим сообщение в объект
+            await self.process_transaction(tx, message)  # Обрабатываем транзакцию
+        except json.JSONDecodeError:
+            logger.error("Failed to parse message: Invalid JSON format")
+            await message.nack(requeue=False)  # Отклоняем сообщение без повторной постановки
+        except asyncio.TimeoutError:
+            logger.error("Timeout during processing")
+            await message.nack(requeue=True)  # Повторная попытка
+        except Exception as e:
+            logger.error(f"Unexpected processing error: {e}", exc_info=True)
+            await message.nack(requeue=False)
 
-        result = await db.insert_tx(tx)
-        if result:
-            logger.info(f"Saved transaction: {dict(tx)}")
-            await message.ack()
+    def parse_message(self, message: IncomingMessage) -> TxStore:
+        """Преобразует сырые данные сообщения в объект TxStore"""
+        data = json.loads(message.body.decode("utf-8"))  # Декодируем байты в JSON
+        content = data["content"]  # Извлекаем содержимое
+        content["sign"] = data["sign"]  # Добавляем подпись
+        return TxStore(**content)  # Создаем объект транзакции
+
+    async def process_transaction(self, tx: TxStore, message: IncomingMessage) -> None:
+        """Основная логика обработки одной транзакции"""
+        # Проверяем, не является ли транзакция дубликатом
+        if await self.check_duplicate(tx):
+            return await message.nack(requeue=False)
+
+        # Проверяем, достаточно ли средств на балансе
+        if not await self.verify_balance(tx):
+            return await message.nack(requeue=False)
+
+        # Проверяем наличие родительских транзакций
+        if not await self.verify_parents(tx):
+            logger.error(f"Parents not found for transaction: {tx.uniq}")
+            return await message.nack(requeue=False)
+
+        # Выполняем пуллинг и обновляем данные
+        await self.execute_pooling(tx)
+        logger.info(f"Transaction processed successfully: {tx.uniq}")
+        await message.ack()  # Подтверждаем успешную обработку
+
+    async def check_duplicate(self, tx: TxStore) -> bool:
+        """Проверяет, существует ли уже такая транзакция в базе"""
+        exists = await self.db.find_one({"credit": tx.credit, "uniq": tx.uniq})
+        if exists:
+            logger.info(f"Duplicate detected: {tx.uniq}")
+            return True
+        return False
+
+    async def verify_balance(self, tx: TxStore) -> bool:
+        """Проверяет, достаточно ли средств для выполнения транзакции"""
+        balance = await self.get_balance(tx.credit)  # Получаем текущий баланс
+        # Проверяем баланс, исключая DEV_ADDRESS
+        if balance < tx.amount and tx.credit != self.config.DEV_ADDRESS:
+            logger.error(f"Insufficient funds: {balance} < {tx.amount} for {tx.credit}")
+            return False
+        return True
+
+    async def get_balance(self, credit: str) -> int:
+        """Получает или обновляет баланс аккаунта"""
+        balance = await self.redis.balance.get(credit)  # Проверяем Redis
+        if balance is None:  # Если в Redis нет данных
+            balance = await get_balance(credit, self.db) or 0  # Запрашиваем из базы
+            await self.redis.balance.set(credit, balance)  # Кэшируем в Redis
         else:
-            logger.error("Failed to save transaction")
-            await message.nack(requeue=True)
-    except Exception as e:
-        logger.error(f"Error processing message: {e}")
-        await message.nack(requeue=True)
+            balance = int(balance.decode("utf-8"))  # Декодируем из байтов
+        return balance
 
-async def main():
-    """Основная функция для запуска consumer'а."""
-    try:
-        await rabbitmq.connect()
-        logger.info("Connected to RabbitMQ. Waiting for messages...")
-        await rabbitmq.consume_messages(on_message)
-    except Exception as e:
-        logger.error(f"Error in main: {e}")
-        raise
-    finally:
-        if rabbitmq.connection and not rabbitmq.connection.is_closed:
-            await rabbitmq.close()
+    async def verify_parents(self, tx: TxStore) -> bool:
+        """Проверяет наличие родительских транзакций в пуле или home"""
+        # Проверяем маму в пуле или home
+        mom_exists = await self.redis.pool.get(tx.mom) or await self.redis.home.get(tx.mom)
+        # Проверяем папу в пуле или home
+        dad_exists = await self.redis.pool.get(tx.dad) or await self.redis.home.get(tx.dad)
+        return bool(mom_exists and dad_exists)  # Возвращаем True, если оба существуют
+
+    async def execute_pooling(self, tx: TxStore) -> None:
+        """Добавляет транзакцию в пул и обновляет балансы"""
+        tx_hash = hash_hex(ordered_sum(dict(tx)))  # Генерируем хэш транзакции
+        tx_data = dict(tx, time=int(time.time_ns() / 1000))  # Добавляем временную метку
+
+        # Сохраняем транзакцию в пул
+        await self.redis.pool.set(tx_hash, json.dumps(tx_data))
+        # Увеличиваем баланс получателя
+        await self.redis.balance.incr(tx.debit, amount=tx.amount)
+        # Уменьшаем баланс отправителя
+        await self.redis.balance.decr(tx.credit, amount=tx.amount)
+        logger.info(f"Transaction pooled: {tx_hash}")
+
+        # Обрабатываем родителей
+        await self.handle_parent(tx.mom)
+        await self.handle_parent(tx.dad)
+
+    async def handle_parent(self, parent_hash: str) -> None:
+        """Перемещает родителя из пула в home и сохраняет в базу"""
+        parent_data = await self.redis.pool.get(parent_hash)  # Проверяем пул
+        if parent_data:  # Если родитель найден
+            await self.redis.pool.delete(parent_hash)  # Удаляем из пула
+            await self.redis.home.set(parent_hash, parent_data)  # Добавляем в home
+            logger.info(f"Parent moved to home: {parent_hash}")
+
+            # Создаем и сохраняем транзакцию в базе
+            parent_tx = self.create_parent_tx(parent_hash, parent_data)
+            success = await self.db.insert_tx(parent_tx)
+            logger.info(f"Parent saved: {parent_hash}" if success else f"Failed to save: {parent_hash}")
+
+    def create_parent_tx(self, hash: str, data: bytes) -> TxWrite:
+        """Создает объект TxWrite для родительской транзакции"""
+        try:
+            tx_dict = json.loads(data.decode("utf-8"))
+            tx_dict["hash"] = hash
+            return TxWrite(**tx_dict)
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Failed to parse parent data for {hash}: {e}")
+            raise  # Или вернуть None и обработать выше
+
+class TransactionService:
+    """Основной сервис для обработки транзакций"""
+    def __init__(self):
+        self.db = MongoDB()  # Инициализация MongoDB
+        self.rabbitmq = RabbitMQ(host='localhost', queue_name='tx')  # Инициализация RabbitMQ
+        self.redis = RedisClients()  # Инициализация Redis клиентов
+        self.processor = TransactionProcessor(self.db, self.rabbitmq, self.redis)  # Процессор
+        self.running = False
+
+    async def run(self) -> None:
+        """Запускает сервис обработки транзакций"""
+        self.running = True
+        try:
+            await self.startup()  # Подключаемся к сервисам
+            logger.info("Service started. Processing messages...")
+            # Начинаем слушать очередь
+            await self.rabbitmq.consume_messages(self.processor.process_message)
+        except Exception as e:
+            logger.error(f"Service error: {e}", exc_info=True)
+            raise
+        finally:
+            await self.shutdown()  # Очищаем ресурсы
+
+    async def startup(self) -> None:
+        """Инициализирует все необходимые подключения"""
+        await self.redis.connect()  # Подключаемся к Redis
+        await self.rabbitmq.connect()  # Подключаемся к RabbitMQ
+        logger.info("Connected to RabbitMQ and Redis")
+
+    async def shutdown(self) -> None:
+        """Закрывает все соединения при завершении работы"""
+        self.running = False
+        await self.redis.close()  # Закрываем Redis
+        if self.rabbitmq.connection and not self.rabbitmq.connection.is_closed:
+            await self.rabbitmq.close()  # Закрываем RabbitMQ, если открыт
             logger.info("RabbitMQ connection closed")
-        else:
-            logger.warning("RabbitMQ connection was not open or already closed")
-        await db.close()
-        logger.info("MongoDB connection closed")
+        await self.db.close()  # Закрываем MongoDB
+        logger.info("All connections closed")
+
+class ReloadHandler(FileSystemEventHandler):
+    """Обработчик событий изменения конкретного файла для перезапуска"""
+    def __init__(self, service: TransactionService, target_file: str):
+        self.service = service
+        self.target_file = os.path.abspath(target_file)  # Полный путь к файлу
+        self.loop = asyncio.get_event_loop()
+
+    def on_modified(self, event):
+        """Вызывается при изменении файла"""
+        if not event.is_directory and os.path.abspath(event.src_path) == self.target_file:
+            logger.info(f"Target file {self.target_file} modified, restarting...")
+            asyncio.ensure_future(self.stop_and_restart(), loop=self.loop)
+
+    async def stop_and_restart(self):
+        """Останавливает сервис и перезапускает программу"""
+        if self.service.running:
+            await self.service.shutdown()
+            logger.info("Restarting application...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+async def main() -> None:
+    """Точка входа в приложение с поддержкой перезапуска"""
+    service = TransactionService()
+    
+    # Указываем конкретный файл для отслеживания (замените на имя вашего файла)
+    target_file = "consumer.py"  # Имя текущего файла 
+    event_handler = ReloadHandler(service, target_file)
+    
+    # Настройка наблюдателя только для директории с целевым файлом
+    observer = Observer()
+    observer.schedule(event_handler, path=os.path.dirname(os.path.abspath(target_file)), recursive=False)
+    observer.start()
+    logger.info(f"File watcher started, monitoring {target_file} for changes...")
+
+    try:
+        await service.run()
+    except KeyboardInterrupt:
+        logger.info("Service stopped by user")
+        observer.stop()
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        observer.stop()
+    finally:
+        observer.stop()
+        observer.join()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Program interrupted by user")
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+    asyncio.run(main())
