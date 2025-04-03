@@ -79,10 +79,10 @@ def validate_tx(tx: TxRead) -> None:
         logger.warning(f"Self-transfer detected: credit={tx.content.credit}")
         raise HTTPException(status_code=400, detail=[{"success": 0, "msg": "not for yourself"}])
     
-    # Проверка мамы и папы
-    if tx.content.mom == tx.content.dad:
-        logger.warning(f"Same mom & dad: {tx.content.mom}")
-        raise HTTPException(status_code=400, detail=[{"success": 0, "msg": "mom and dad should be different"}])
+    # Проверка уникальности всех родителей
+    if len(set(tx.content.parents)) != len(tx.content.parents):
+        logger.warning(f"Same parents: {tx.content.parents}")
+        raise HTTPException(status_code=400, detail=[{"success": 0, "msg": "all parents should be different"}])
 
     # Проверка сообщения
     if tx.content.msg and len(tx.content.msg) > MAX_MSG_LENGTH:
