@@ -36,7 +36,7 @@ async def arange(count):
     """Генератор для асинхронного перебора чисел."""
     for i in range(count):
         yield i
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(round(random.uniform(0, 0.5), 2))
 
 async def send(in_set):
     """Отправка случайных транзакций."""
@@ -49,13 +49,10 @@ async def send(in_set):
         u = str(uuid.uuid4())  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
         p = await client.get('http://127.0.0.1:8000/pool')
-        p = p.json()
-        r = random.randint(0, len(p)-1)
-        r = 0 if len(p) < 4 else random.randint(0, len(p)-2)
+        r = p.json()
         # Формируем транзакцию
         c = Tx(
-            mom = p[r],
-            dad = p[r+1],
+            parents = r,
             debit = d,
             credit = c,
             amount = a,
@@ -78,7 +75,7 @@ async def send(in_set):
 async def main():
     """Основная функция для запуска генератора транзакций."""
     in_set = input("Enter the number of transactions to send: ")
-    await asyncio.gather(*[send(in_set) for _ in range(1)])
+    await asyncio.gather(*[send(in_set) for _ in range(10)])
 
 if __name__ == "__main__":
     try:

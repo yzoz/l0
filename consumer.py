@@ -28,7 +28,7 @@ class TransactionConfig:
     """Конфигурация параметров транзакций"""
     # Специальный адрес разработчика для обхода проверки баланса
     DEV_ADDRESS: str = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy"
-    CLEAR: int = 10
+    CLEAR: int = 5
     CONFIRM: int = 3
 
 class RedisClients:
@@ -62,12 +62,14 @@ class TransactionProcessor:
         self.rabbitmq = rabbitmq  # Очередь RabbitMQ
         self.redis = redis_clients  # Клиенты Redis
         self.config = TransactionConfig()  # Конфигурация транзакций
-        self.count = 0
+        #self.count = 0
+        self.loop = asyncio.get_event_loop()
+        self.loop.create_task(self.periodic_check_pool())
 
     async def process_message(self, message: IncomingMessage) -> None:
         """Обрабатывает входящее сообщение из RabbitMQ"""
         logger.info(f"{'_' * 80}\nNew message received")  # Разделитель в логах
-        self.count += 1
+        #self.count += 1
         try:
             tx = self.parse_message(message)  # Парсим сообщение в объект
             await self.process_transaction(tx, message)  # Обрабатываем транзакцию
@@ -80,8 +82,7 @@ class TransactionProcessor:
         except Exception as e:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
             await message.nack(requeue=False)
-        if self.count % self.config.CLEAR == 0:
-            await self.check_pool()
+        #if self.count % self.config.CLEAR == 0:
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
         """Преобразует сырые данные сообщения в объект TxStore"""
@@ -138,54 +139,64 @@ class TransactionProcessor:
         return balance
 
     async def verify_parents(self, tx: TxStore) -> bool:
-        """Проверяет наличие родительских транзакций в пуле или home"""
-        # Проверяем маму в пуле или home
-        mom_exists = await self.redis.pool.get(tx.mom) or await self.redis.home.get(tx.mom)
-        # Проверяем папу в пуле или home
-        dad_exists = await self.redis.pool.get(tx.dad) or await self.redis.home.get(tx.dad)
-        return bool(mom_exists and dad_exists)  # Возвращаем True, если оба существуют
+        """Проверяет наличие всех родительских транзакций в пуле или home"""
+        for parent_hash in tx.parents:
+            parent_exists = await self.redis.pool.get(parent_hash) or await self.redis.home.get(parent_hash)
+            if not parent_exists:
+                logger.warning(f"Parent {parent_hash} not found for transaction {tx.uniq}")
+                return False
+        return True
 
     async def execute_pooling(self, tx: TxStore) -> None:
-        """Добавляет транзакцию в пул и обновляет балансы"""
-        tx_hash = hash_hex(ordered_sum(dict(tx)))  # Генерируем хэш транзакции
-        tx_data = dict(tx, time=int(time.time_ns() / 1000))  # Добавляем временную метку
+        """Добавляет транзакцию в пул, обновляет балансы и обрабатывает родителей"""
+        tx_hash = hash_hex(ordered_sum(dict(tx)))
+        tx_data = dict(tx, time=int(time.time_ns() / 1000))
 
-        # Сохраняем транзакцию в пул
-        await self.redis.pool.set(tx_hash, json.dumps(tx_data))
-        await self.redis.pool.zadd("unconfirmed", {tx_hash: 0})
+        async with self.redis.pool.pipeline() as pipe:
+            await pipe.set(tx_hash, json.dumps(tx_data))
+            await pipe.zadd("unconfirmed", {tx_hash: 0})
+            await pipe.execute()
+        
         await self.redis.refs.set(tx_hash, "0")
-        # Увеличиваем баланс получателя
         await self.redis.balance.incr(tx.debit, amount=tx.amount)
-        # Уменьшаем баланс отправителя
         await self.redis.balance.decr(tx.credit, amount=tx.amount)
+
         logger.info(f"Transaction pooled: {tx_hash}")
+        await self.handle_parent(tx.parents)
 
-        # Обрабатываем родителей
-        await self.handle_parent(tx.mom)
-        await self.handle_parent(tx.dad)
-
-    async def handle_parent(self, parent_hash: str) -> None:
-        await self.redis.refs.incr(parent_hash)
-        await self.redis.pool.zincrby("unconfirmed", 1, parent_hash)
+    async def handle_parent(self, parents: str) -> None:
+        """Обрабатывает список родителей, увеличивая их счетчики ссылок"""
+        for parent_hash in parents:
+            await self.redis.refs.incr(parent_hash)
+            await self.redis.pool.zincrby("unconfirmed", 1, parent_hash)
 
     async def confirm_tx(self, tx_hash: str) -> bool:
+        if await self.redis.home.get(tx_hash):
+            async with self.redis.pool.pipeline() as pipe:
+                await pipe.zrem("unconfirmed", tx_hash)
+                await pipe.delete(tx_hash)
+                await self.redis.refs.delete(tx_hash)
+                await pipe.execute()
+            return False
         refs = int(await self.redis.refs.get(tx_hash) or 0)
         if refs >= self.config.CONFIRM:
             tx_data = await self.redis.pool.get(tx_hash)
             if tx_data:
                 # Создаем и сохраняем транзакцию в базе
-                parent_tx = self.create_parent_tx(tx_hash, tx_data)
-                success = await self.db.insert_tx(parent_tx)
-                logger.info(f"Parent saved: {tx_hash}" if success else f"Failed to save: {tx_hash}")
-                await self.redis.pool.zrem("unconfirmed", tx_hash)
-                await self.redis.pool.delete(tx_hash)
-                await self.redis.refs.delete(tx_hash)
-                await self.redis.home.set(tx_hash, tx_data)
-                return True
+                confirmed_tx = self.create_tx(tx_hash, tx_data)
+                success = await self.db.insert_tx(confirmed_tx)
+                logger.info(f"Confirmed TX saved: {tx_hash}" if success else f"Failed to save: {tx_hash}")
+                if success:
+                    async with self.redis.pool.pipeline() as pipe:
+                        await pipe.zrem("unconfirmed", tx_hash)
+                        await pipe.delete(tx_hash)
+                        await self.redis.refs.delete(tx_hash)
+                        await self.redis.home.set(tx_hash, tx_data)
+                        await pipe.execute()
+                return success
         return False
 
-    def create_parent_tx(self, hash: str, data: bytes) -> TxWrite:
-        """Создает объект TxWrite для родительской транзакции"""
+    def create_tx(self, hash: str, data: bytes) -> TxWrite:
         try:
             tx_dict = json.loads(data.decode("utf-8"))
             tx_dict["hash"] = hash
@@ -199,6 +210,11 @@ class TransactionProcessor:
         tx_hashes = await self.redis.pool.zrange("unconfirmed", 0, -1)
         for tx_hash in tx_hashes:
             await self.confirm_tx(tx_hash.decode())
+
+    async def periodic_check_pool(self):
+        while True:
+            await self.check_pool()
+            await asyncio.sleep(1)
 
 class TransactionService:
     """Основной сервис для обработки транзакций"""

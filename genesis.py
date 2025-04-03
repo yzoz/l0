@@ -1,4 +1,4 @@
-from src.models.tx import TxStore, TxWrite
+from src.models.tx import TxStore
 import asyncio
 import redis
 import json
@@ -12,8 +12,7 @@ txs = db.tx
 txs.drop()
 
 tx = [TxStore(
-    mom = "",
-    dad = "",
+    parents = ["b","a"],
     debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
     credit = "",
     amount = 500000000000000,
@@ -21,11 +20,18 @@ tx = [TxStore(
     sign = "",
     msg = ""
 ), TxStore(
-    mom = "",
-    dad = "",
-    debit = "RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR",
+    parents = ["f","e"],
+    debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
     credit = "",
-    amount = 500000000000000,
+    amount = 330000000000000,
+    uniq = "",
+    sign = "",
+    msg = ""
+), TxStore(
+    parents = ["g","i"],
+    debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
+    credit = "",
+    amount = 250000000000000,
     uniq = "",
     sign = "",
     msg = ""
