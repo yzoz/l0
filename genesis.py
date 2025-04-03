@@ -18,7 +18,7 @@ tx = [TxStore(
     amount = 500000000000000,
     uniq = "",
     sign = "",
-    msg = ""
+    msg = "genesis"
 ), TxStore(
     parents = ["f","e"],
     debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
@@ -26,7 +26,7 @@ tx = [TxStore(
     amount = 330000000000000,
     uniq = "",
     sign = "",
-    msg = ""
+    msg = "genesis2"
 ), TxStore(
     parents = ["g","i"],
     debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
@@ -34,7 +34,7 @@ tx = [TxStore(
     amount = 250000000000000,
     uniq = "",
     sign = "",
-    msg = ""
+    msg = "genesis3"
 )]
 
 async def main():
