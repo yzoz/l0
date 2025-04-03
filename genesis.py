@@ -38,18 +38,17 @@ tx = [TxStore(
 )]
 
 async def main():
-    p = redis.Redis(host='localhost', db=0)
-    r = redis.Redis(host='localhost', db=1)
-    p.flushall()
+    r = redis.Redis(host='localhost', db=0)
+    r.flushall()
     for t in tx:
         d = dict(t)
         h = hash_hex(ordered_sum(dict(d)))
         d["time"] = int(time.time_ns() / 1000)
         m = json.dumps(dict(d))
-        p.set(h, m)
-        p.zadd("unconfirmed", {h: 0})
-        r.set(h, "0")
-        value = p.get(h)
+        r.set(f"pool:{h}", m)
+        r.zadd("unconfirmed", {h: 0})
+        r.set(f"refs:{h}", "0")
+        value = r.get(f"pool:{h}")
         w = json.loads(value.decode("utf-8"))
         print(w)
         #await r.delete(h)

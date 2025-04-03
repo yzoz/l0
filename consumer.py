@@ -31,45 +31,31 @@ class TransactionConfig:
     CLEAR: int = 5
     CONFIRM: int = 3
 
-class RedisClients:
-    """Класс для управления подключениями к различным базам Redis"""
+class RedisClient:
     def __init__(self):
-        # Клиент для пула транзакций
-        self.pool: Optional[redis.Redis] = None
-        # Клиент для "дома" транзакций
-        self.home: Optional[redis.Redis] = None
-        # Клиент для хранения балансов
-        self.balance: Optional[redis.Redis] = None
-        self.refs: Optional[redis.Redis] = None
+        self.client: Optional[redis.Redis] = None
 
     async def connect(self) -> None:
-        """Устанавливает соединения с тремя базами Redis"""
-        self.pool = await redis.Redis(host='localhost', db=0)  # База для пула
-        self.refs = await redis.Redis(host='localhost', db=1)  # База для ссылок
-        self.home = await redis.Redis(host='localhost', db=2)  # База для home
-        self.balance = await redis.Redis(host='localhost', db=3)  # База для балансов
+        self.client = await redis.Redis(host='localhost', db=0)  # Единая база
 
     async def close(self) -> None:
-        """Закрывает все открытые соединения с Redis"""
-        for client in (self.pool, self.home, self.balance, self.refs):
-            if client:  # Проверяем, что клиент существует
-                await client.aclose()
+        if self.client:
+            await self.client.aclose()
 
 class TransactionProcessor:
     """Класс, отвечающий за обработку транзакций"""
-    def __init__(self, db: MongoDB, rabbitmq: RabbitMQ, redis_clients: RedisClients):
+    def __init__(self, db: MongoDB, rabbitmq: RabbitMQ, redis_client: RedisClient):
         self.db = db  # База данных MongoDB
         self.rabbitmq = rabbitmq  # Очередь RabbitMQ
-        self.redis = redis_clients  # Клиенты Redis
+        self.redis = redis_client  # Клиенты Redis
         self.config = TransactionConfig()  # Конфигурация транзакций
-        #self.count = 0
-        self.loop = asyncio.get_event_loop()
-        self.loop.create_task(self.periodic_check_pool())
+        self.count = 0
+        #self.loop = asyncio.get_event_loop()
+        #self.loop.create_task(self.periodic_check_pool())
 
     async def process_message(self, message: IncomingMessage) -> None:
         """Обрабатывает входящее сообщение из RabbitMQ"""
         logger.info(f"{'_' * 80}\nNew message received")  # Разделитель в логах
-        #self.count += 1
         try:
             tx = self.parse_message(message)  # Парсим сообщение в объект
             await self.process_transaction(tx, message)  # Обрабатываем транзакцию
@@ -82,7 +68,8 @@ class TransactionProcessor:
         except Exception as e:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
             await message.nack(requeue=False)
-        #if self.count % self.config.CLEAR == 0:
+        if self.count % self.config.CLEAR == 0:
+            await self.check_pool()
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
         """Преобразует сырые данные сообщения в объект TxStore"""
@@ -103,13 +90,12 @@ class TransactionProcessor:
 
         # Проверяем наличие родительских транзакций
         if not await self.verify_parents(tx):
-            logger.error(f"Parents not found for transaction: {tx.uniq}")
             return await message.nack(requeue=False)
 
         # Выполняем пуллинг и обновляем данные
         await self.execute_pooling(tx)
-        logger.info(f"Transaction processed successfully: {tx.uniq}")
         await message.ack()  # Подтверждаем успешную обработку
+        self.count += 1
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -127,13 +113,28 @@ class TransactionProcessor:
             logger.error(f"Insufficient funds: {balance} < {tx.amount} for {tx.credit}")
             return False
         return True
-
+    """
+    async def get_balance(self, credit: str) -> int:
+        balance_key = f"balance:{credit}"
+        try:
+            balance = await asyncio.wait_for(self.redis.client.get(balance_key), timeout=5.0)
+            if balance is None:
+                balance = await asyncio.wait_for(get_balance(credit, self.db), timeout=5.0) or 0
+                await self.redis.client.set(balance_key, balance)
+            else:
+                balance = int(balance.decode("utf-8"))
+            return balance
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout fetching balance for {credit}")
+            return 0
+    """
     async def get_balance(self, credit: str) -> int:
         """Получает или обновляет баланс аккаунта"""
-        balance = await self.redis.balance.get(credit)  # Проверяем Redis
+        balance_key = f"balance:{credit}"
+        balance = await self.redis.client.get(balance_key)  # Проверяем Redis
         if balance is None:  # Если в Redis нет данных
             balance = await get_balance(credit, self.db) or 0  # Запрашиваем из базы
-            await self.redis.balance.set(credit, balance)  # Кэшируем в Redis
+            await self.redis.client.set(balance_key, balance)  # Кэшируем в Redis
         else:
             balance = int(balance.decode("utf-8"))  # Декодируем из байтов
         return balance
@@ -141,7 +142,9 @@ class TransactionProcessor:
     async def verify_parents(self, tx: TxStore) -> bool:
         """Проверяет наличие всех родительских транзакций в пуле или home"""
         for parent_hash in tx.parents:
-            parent_exists = await self.redis.pool.get(parent_hash) or await self.redis.home.get(parent_hash)
+            pool_key = f"pool:{parent_hash}"
+            home_key = f"home:{parent_hash}"
+            parent_exists = await self.redis.client.get(pool_key) or await self.redis.client.get(home_key)
             if not parent_exists:
                 logger.warning(f"Parent {parent_hash} not found for transaction {tx.uniq}")
                 return False
@@ -152,14 +155,19 @@ class TransactionProcessor:
         tx_hash = hash_hex(ordered_sum(dict(tx)))
         tx_data = dict(tx, time=int(time.time_ns() / 1000))
 
-        async with self.redis.pool.pipeline() as pipe:
-            await pipe.set(tx_hash, json.dumps(tx_data))
-            await pipe.zadd("unconfirmed", {tx_hash: 0})
+        async with self.redis.client.pipeline() as pipe:
+            pool_key = f"pool:{tx_hash}"
+            refs_key = f"refs:{tx_hash}"
+            balance_debit_key = f"balance:{tx.debit}"
+            balance_credit_key = f"balance:{tx.credit}"
+            unconfirmed_key = "unconfirmed"
+
+            await pipe.set(pool_key, json.dumps(tx_data))
+            await pipe.zadd(unconfirmed_key, {tx_hash: 0})
+            await pipe.set(refs_key, "0")
+            await pipe.incr(balance_debit_key, amount=tx.amount)
+            await pipe.decr(balance_credit_key, amount=tx.amount)
             await pipe.execute()
-        
-        await self.redis.refs.set(tx_hash, "0")
-        await self.redis.balance.incr(tx.debit, amount=tx.amount)
-        await self.redis.balance.decr(tx.credit, amount=tx.amount)
 
         logger.info(f"Transaction pooled: {tx_hash}")
         await self.handle_parent(tx.parents)
@@ -167,31 +175,34 @@ class TransactionProcessor:
     async def handle_parent(self, parents: str) -> None:
         """Обрабатывает список родителей, увеличивая их счетчики ссылок"""
         for parent_hash in parents:
-            await self.redis.refs.incr(parent_hash)
-            await self.redis.pool.zincrby("unconfirmed", 1, parent_hash)
+            pool_key = f"pool:{parent_hash}"
+            refs_key = f"refs:{parent_hash}"
+            if await self.redis.client.get(pool_key):
+                async with self.redis.client.pipeline() as pipe:
+                    await pipe.incr(refs_key)
+                    await pipe.zincrby("unconfirmed", 1, parent_hash)
+                    await pipe.execute()
 
     async def confirm_tx(self, tx_hash: str) -> bool:
-        if await self.redis.home.get(tx_hash):
-            async with self.redis.pool.pipeline() as pipe:
-                await pipe.zrem("unconfirmed", tx_hash)
-                await pipe.delete(tx_hash)
-                await self.redis.refs.delete(tx_hash)
-                await pipe.execute()
+        home_key = f"home:{tx_hash}"
+        refs_key = f"refs:{tx_hash}"
+        pool_key = f"pool:{tx_hash}"
+        if await self.redis.client.get(home_key):
             return False
-        refs = int(await self.redis.refs.get(tx_hash) or 0)
+        refs = int(await self.redis.client.get(refs_key) or 0)
         if refs >= self.config.CONFIRM:
-            tx_data = await self.redis.pool.get(tx_hash)
+            tx_data = await self.redis.client.get(pool_key)
             if tx_data:
                 # Создаем и сохраняем транзакцию в базе
                 confirmed_tx = self.create_tx(tx_hash, tx_data)
                 success = await self.db.insert_tx(confirmed_tx)
                 logger.info(f"Confirmed TX saved: {tx_hash}" if success else f"Failed to save: {tx_hash}")
                 if success:
-                    async with self.redis.pool.pipeline() as pipe:
+                    async with self.redis.client.pipeline() as pipe:
                         await pipe.zrem("unconfirmed", tx_hash)
-                        await pipe.delete(tx_hash)
-                        await self.redis.refs.delete(tx_hash)
-                        await self.redis.home.set(tx_hash, tx_data)
+                        await pipe.delete(pool_key)
+                        await pipe.delete(refs_key)
+                        await pipe.set(home_key, tx_data)
                         await pipe.execute()
                 return success
         return False
@@ -207,21 +218,21 @@ class TransactionProcessor:
 
     # Периодическая проверка пула
     async def check_pool(self):
-        tx_hashes = await self.redis.pool.zrange("unconfirmed", 0, -1)
+        tx_hashes = await self.redis.client.zrange("unconfirmed", 0, -1)
         for tx_hash in tx_hashes:
             await self.confirm_tx(tx_hash.decode())
 
-    async def periodic_check_pool(self):
+    """async def periodic_check_pool(self):
         while True:
             await self.check_pool()
-            await asyncio.sleep(1)
+            await asyncio.sleep(1)"""
 
 class TransactionService:
     """Основной сервис для обработки транзакций"""
     def __init__(self):
         self.db = MongoDB()  # Инициализация MongoDB
         self.rabbitmq = RabbitMQ(host='localhost', queue_name='tx')  # Инициализация RabbitMQ
-        self.redis = RedisClients()  # Инициализация Redis клиентов
+        self.redis = RedisClient()  # Инициализация Redis клиентов
         self.processor = TransactionProcessor(self.db, self.rabbitmq, self.redis)  # Процессор
         self.running = False
 
