@@ -10,5 +10,4 @@ def ordered_sum(t: dict) -> str:
     for t in s.values():
         if isinstance(t, list): t = "".join(sorted(t))
         m += str(t)
-    print(m)
     return m
