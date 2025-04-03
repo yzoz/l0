@@ -25,7 +25,7 @@ pipeline = [
             "connectToField": "parents",  # Ищем в массиве parents
             "as": "descendants",
             "depthField": "level",
-            "maxDepth": 10
+            "maxDepth": 25
         }
     }
 ]
