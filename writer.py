@@ -1,33 +1,37 @@
 import json
 import logging
-import time
 from dataclasses import dataclass
 from typing import Optional
 from src.database.mongodb import MongoDB
 from src.models.tx import TxWrite
-import redis
+import redis.asyncio as redis
+from multiprocessing import Process, Event
+import signal
+import sys
+import os
+import asyncio
+import random
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class TransactionConfig:
-    DEV_ADDRESS: str = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy"
     CONFIRM: int = 3
 
 class RedisClient:
     def __init__(self):
         self.client: Optional[redis.Redis] = None
 
-    def connect(self) -> None:
-        self.client = redis.Redis(host='localhost', db=0)
+    async def connect(self) -> None:
+        self.client = await redis.Redis(host='localhost', db=0)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         if self.client:
-            self.client.close()
+            await self.client.aclose()
 
 class ConfirmationProcessor:
     def __init__(self, db: MongoDB, redis_client: RedisClient):
@@ -35,35 +39,44 @@ class ConfirmationProcessor:
         self.redis = redis_client
         self.config = TransactionConfig()
 
-    def confirm_tx(self, tx_hash: str) -> bool:
-        home_key = f"home:{tx_hash}"
-        refs_key = f"refs:{tx_hash}"
-        pool_key = f"pool:{tx_hash}"
-        
-        if self.redis.client.get(home_key):
-            with self.redis.client.pipeline() as pipe:
-                pipe.zrem("unconfirmed", tx_hash)
-                pipe.delete(pool_key)
-                pipe.delete(refs_key)
-                pipe.execute()
+    async def confirm_tx(self, tx_hash: str) -> bool:
+        lock_key = f"lock:{tx_hash}"
+        # Пытаемся установить блокировку с TTL 5 секунд
+        locked = await self.redis.client.set(lock_key, "1", nx=True, ex=5)
+        if not locked:
+            return False  # Транзакция уже обрабатывается другим процессом
+
+        try:
+            home_key = f"home:{tx_hash}"
+            refs_key = f"refs:{tx_hash}"
+            pool_key = f"pool:{tx_hash}"
+
+            if await self.redis.client.get(home_key):
+                async with self.redis.client.pipeline() as pipe:
+                    await pipe.zrem("unconfirmed", tx_hash)
+                    await pipe.delete(pool_key)
+                    await pipe.delete(refs_key)
+                    await pipe.execute()
+                return False
+
+            refs = int(await self.redis.client.get(refs_key) or 0)
+            if refs >= self.config.CONFIRM:
+                tx_data = await self.redis.client.get(pool_key)
+                if tx_data:
+                    confirmed_tx = self.create_tx(tx_hash, tx_data)
+                    success = await self.db.insert_tx(confirmed_tx)  # Предполагается асинхронный метод
+                    logger.info(f"Confirmed TX saved: {tx_hash}" if success else f"Failed to save: {tx_hash}")
+                    if success:
+                        async with self.redis.client.pipeline() as pipe:
+                            await pipe.zrem("unconfirmed", tx_hash)
+                            await pipe.delete(pool_key)
+                            await pipe.delete(refs_key)
+                            await pipe.set(home_key, tx_data)
+                            await pipe.execute()
+                    return success
             return False
-        
-        refs = int(self.redis.client.get(refs_key) or 0)
-        if refs >= self.config.CONFIRM:
-            tx_data = self.redis.client.get(pool_key)
-            if tx_data:
-                confirmed_tx = self.create_tx(tx_hash, tx_data)
-                success = self.db.insert_tx(confirmed_tx)  # Предполагается, что insert_tx синхронный
-                logger.info(f"Confirmed TX saved: {tx_hash}" if success else f"Failed to save: {tx_hash}")
-                if success:
-                    with self.redis.client.pipeline() as pipe:
-                        pipe.zrem("unconfirmed", tx_hash)
-                        pipe.delete(pool_key)
-                        pipe.delete(refs_key)
-                        pipe.set(home_key, tx_data)
-                        pipe.execute()
-                return success
-        return False
+        finally:
+            await self.redis.client.delete(lock_key)  # Снимаем блокировку
 
     def create_tx(self, hash: str, data: bytes) -> TxWrite:
         try:
@@ -74,10 +87,15 @@ class ConfirmationProcessor:
             logger.error(f"Failed to parse transaction data for {hash}: {e}")
             raise
 
-    def check_pool(self):
-        tx_hashes = self.redis.client.zrange("unconfirmed", 0, -1)
+    async def check_pool(self):
+        tx_hashes = await self.redis.client.zrange("unconfirmed", 0, -1)
         for tx_hash in tx_hashes:
-            self.confirm_tx(tx_hash.decode("utf-8"))
+            await self.confirm_tx(tx_hash.decode("utf-8"))
+
+    async def periodic_check_pool(self):
+        while True:
+            await self.check_pool()
+            await asyncio.sleep(round(random.uniform(0, 0.5), 2))  # Проверка каждую секунду
 
 class ConfirmationService:
     def __init__(self):
@@ -86,38 +104,85 @@ class ConfirmationService:
         self.processor = ConfirmationProcessor(self.db, self.redis)
         self.running = False
 
-    def run(self) -> None:
+    async def run(self) -> None:
         self.running = True
         try:
-            self.startup()
-            logger.info("Confirmation service started. Checking unconfirmed transactions...")
-            while self.running:
-                self.processor.check_pool()
-                time.sleep(1)  # Проверка каждую секунду
+            await self.startup()
+            logger.info(f"Confirmation process {os.getpid()} started")
+            await self.processor.periodic_check_pool()
         except Exception as e:
             logger.error(f"Service error: {e}", exc_info=True)
             raise
         finally:
-            self.shutdown()
+            await self.shutdown()
 
-    def startup(self) -> None:
-        self.redis.connect()
+    async def startup(self) -> None:
+        await self.redis.connect()
         logger.info("Connected to Redis and MongoDB")
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         self.running = False
-        self.redis.close()
-        self.db.close()  # Предполагается, что close синхронный
+        await self.redis.close()
+        await self.db.close()
         logger.info("All connections closed")
 
-def main():
-    service = ConfirmationService()
+def run_confirmation_process(stop_event: Event):
+    """Запускает асинхронный цикл для одного процесса"""
+    async def async_run():
+        service = ConfirmationService()
+        try:
+            await service.run()
+        except Exception as e:
+            logger.error(f"Confirmation process failed: {e}", exc_info=True)
+        finally:
+            await service.shutdown()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        service.run()
+        loop.run_until_complete(async_run())
     except KeyboardInterrupt:
-        logger.info("Service stopped by user")
+        logger.info("Confirmation process interrupted")
+    finally:
+        loop.close()
+
+def main():
+    NUM_PROCESSES = 10  # Количество процессов
+    processes = []
+    stop_events = []
+
+    # Создаем процессы
+    for _ in range(NUM_PROCESSES):
+        stop_event = Event()
+        process = Process(target=run_confirmation_process, args=(stop_event,))
+        processes.append(process)
+        stop_events.append(stop_event)
+        process.start()
+
+    logger.info(f"Started {NUM_PROCESSES} confirmation processes")
+
+    # Обработка сигналов для graceful shutdown
+    def signal_handler(sig, frame):
+        logger.info("Received shutdown signal, stopping processes...")
+        for stop_event in stop_events:
+            stop_event.set()
+        for process in processes:
+            process.join()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        for process in processes:
+            process.join()
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error(f"Main process error: {e}")
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join()
 
 if __name__ == "__main__":
     main()
