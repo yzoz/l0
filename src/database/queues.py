@@ -14,6 +14,7 @@ class RabbitMQ:
         """Инициализация подключения к RabbitMQ с dead-letter очередью."""
         self.connection = await connect_robust(f"amqp://guest:guest@{self.host}/")
         self.channel = await self.connection.channel()
+        #await self.rabbitmq.channel.set_qos(prefetch_count=1)
         try: # Создание dead-letter очереди
             await self.channel.declare_queue(
                 "dead-letter",
