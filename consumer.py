@@ -11,15 +11,13 @@ from src.models.tx import TxStore, TxWrite
 from src.utils.data import hash_hex, ordered_sum
 from src.utils.balance import get_balance
 import redis.asyncio as redis
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-import os
 import sys
+from multiprocessing import Process, Event
+import signal
 
-# Настройка логирования с красивым форматом вывода
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -28,8 +26,6 @@ class TransactionConfig:
     """Конфигурация параметров транзакций"""
     # Специальный адрес разработчика для обхода проверки баланса
     DEV_ADDRESS: str = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy"
-    CLEAR: int = 5
-    CONFIRM: int = 3
 
 class RedisClient:
     def __init__(self):
@@ -49,9 +45,6 @@ class TransactionProcessor:
         self.rabbitmq = rabbitmq  # Очередь RabbitMQ
         self.redis = redis_client  # Клиенты Redis
         self.config = TransactionConfig()  # Конфигурация транзакций
-        self.count = 0
-        #self.loop = asyncio.get_event_loop()
-        #self.loop.create_task(self.periodic_check_pool())
 
     async def process_message(self, message: IncomingMessage) -> None:
         """Обрабатывает входящее сообщение из RabbitMQ"""
@@ -68,9 +61,6 @@ class TransactionProcessor:
         except Exception as e:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
             await message.nack(requeue=False)
-        if self.count % self.config.CLEAR == 0:
-            print(self.count)
-            await self.check_pool()
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
         """Преобразует сырые данные сообщения в объект TxStore"""
@@ -96,7 +86,6 @@ class TransactionProcessor:
         # Выполняем пуллинг и обновляем данные
         await self.execute_pooling(tx)
         await message.ack()  # Подтверждаем успешную обработку
-        self.count += 1
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -114,7 +103,7 @@ class TransactionProcessor:
             logger.error(f"Insufficient funds: {balance} < {tx.amount} for {tx.credit}")
             return False
         return True
-    """
+    
     async def get_balance(self, credit: str) -> int:
         balance_key = f"balance:{credit}"
         try:
@@ -128,7 +117,7 @@ class TransactionProcessor:
         except asyncio.TimeoutError:
             logger.error(f"Timeout fetching balance for {credit}")
             return 0
-    """
+        
     async def get_balance(self, credit: str) -> int:
         """Получает или обновляет баланс аккаунта"""
         balance_key = f"balance:{credit}"
@@ -137,7 +126,7 @@ class TransactionProcessor:
             balance = await get_balance(credit, self.db) or 0  # Запрашиваем из базы
             await self.redis.client.set(balance_key, balance)  # Кэшируем в Redis
         else:
-            balance = int(balance.decode("utf-8"))  # Декодируем из байтов
+            balance = int(balance)  # Декодируем из байтов
         return balance
 
     async def verify_parents(self, tx: TxStore) -> bool:
@@ -155,20 +144,24 @@ class TransactionProcessor:
         """Добавляет транзакцию в пул, обновляет балансы и обрабатывает родителей"""
         tx_hash = hash_hex(ordered_sum(dict(tx)))
         tx_data = dict(tx, time=int(time.time_ns() / 1000))
+        pool_key = f"pool:{tx_hash}"
+        refs_key = f"refs:{tx_hash}"
+        balance_debit_key = f"balance:{tx.debit}"
+        balance_credit_key = f"balance:{tx.credit}"
+        unconfirmed_key = "unconfirmed"
 
         async with self.redis.client.pipeline() as pipe:
-            pool_key = f"pool:{tx_hash}"
-            refs_key = f"refs:{tx_hash}"
-            balance_debit_key = f"balance:{tx.debit}"
-            balance_credit_key = f"balance:{tx.credit}"
-            unconfirmed_key = "unconfirmed"
 
             await pipe.set(pool_key, json.dumps(tx_data))
             await pipe.zadd(unconfirmed_key, {tx_hash: 0})
             await pipe.set(refs_key, "0")
-            await pipe.incr(balance_debit_key, amount=tx.amount)
-            await pipe.decr(balance_credit_key, amount=tx.amount)
-            await pipe.execute()
+            await pipe.incrby(balance_debit_key, tx.amount)
+            await pipe.decrby(balance_credit_key, tx.amount)
+            try:
+                await pipe.execute()
+            except Exception as e:
+                logger.error(f"Pipeline failed: {e}")
+                raise
 
         logger.info(f"Transaction pooled: {tx_hash}")
         await self.handle_parent(tx.parents)
@@ -184,134 +177,95 @@ class TransactionProcessor:
                     await pipe.zincrby("unconfirmed", 1, parent_hash)
                     await pipe.execute()
 
-    async def confirm_tx(self, tx_hash: str) -> bool:
-        home_key = f"home:{tx_hash}"
-        refs_key = f"refs:{tx_hash}"
-        pool_key = f"pool:{tx_hash}"
-        if await self.redis.client.get(home_key):
-            return False
-        refs = int(await self.redis.client.get(refs_key) or 0)
-        if refs >= self.config.CONFIRM:
-            tx_data = await self.redis.client.get(pool_key)
-            if tx_data:
-                # Создаем и сохраняем транзакцию в базе
-                confirmed_tx = self.create_tx(tx_hash, tx_data)
-                success = await self.db.insert_tx(confirmed_tx)
-                logger.info(f"Confirmed TX saved: {tx_hash}" if success else f"Failed to save: {tx_hash}")
-                if success:
-                    async with self.redis.client.pipeline() as pipe:
-                        await pipe.zrem("unconfirmed", tx_hash)
-                        await pipe.delete(pool_key)
-                        await pipe.delete(refs_key)
-                        await pipe.set(home_key, tx_data)
-                        await pipe.execute()
-                return success
-        return False
-
-    def create_tx(self, hash: str, data: bytes) -> TxWrite:
-        try:
-            tx_dict = json.loads(data.decode("utf-8"))
-            tx_dict["hash"] = hash
-            return TxWrite(**tx_dict)
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Failed to parse parent data for {hash}: {e}")
-            raise  # Или вернуть None и обработать выше
-
-    # Периодическая проверка пула
-    async def check_pool(self):
-        tx_hashes = await self.redis.client.zrange("unconfirmed", 0, -1)
-        for tx_hash in tx_hashes:
-            await self.confirm_tx(tx_hash.decode())
-
-    """async def periodic_check_pool(self):
-        while True:
-            await self.check_pool()
-            await asyncio.sleep(1)"""
-
 class TransactionService:
-    """Основной сервис для обработки транзакций"""
     def __init__(self):
-        self.db = MongoDB()  # Инициализация MongoDB
-        self.rabbitmq = RabbitMQ(host='localhost', queue_name='tx')  # Инициализация RabbitMQ
-        self.redis = RedisClient()  # Инициализация Redis клиентов
-        self.processor = TransactionProcessor(self.db, self.rabbitmq, self.redis)  # Процессор
+        self.db = MongoDB()
+        self.rabbitmq = RabbitMQ(host='localhost', queue_name='tx')
+        self.redis = RedisClient()
+        self.processor = TransactionProcessor(self.db, self.rabbitmq, self.redis)
         self.running = False
 
     async def run(self) -> None:
-        """Запускает сервис обработки транзакций"""
         self.running = True
         try:
-            await self.startup()  # Подключаемся к сервисам
+            await self.startup()
             logger.info("Service started. Processing messages...")
-            # Начинаем слушать очередь
             await self.rabbitmq.consume_messages(self.processor.process_message)
         except Exception as e:
             logger.error(f"Service error: {e}", exc_info=True)
             raise
         finally:
-            await self.shutdown()  # Очищаем ресурсы
+            await self.shutdown()
 
     async def startup(self) -> None:
-        """Инициализирует все необходимые подключения"""
-        await self.redis.connect()  # Подключаемся к Redis
-        await self.rabbitmq.connect()  # Подключаемся к RabbitMQ
+        await self.redis.connect()
+        await self.rabbitmq.connect()
         logger.info("Connected to RabbitMQ and Redis")
 
     async def shutdown(self) -> None:
-        """Закрывает все соединения при завершении работы"""
         self.running = False
-        await self.redis.close()  # Закрываем Redis
+        await self.redis.close()
         if self.rabbitmq.connection and not self.rabbitmq.connection.is_closed:
-            await self.rabbitmq.close()  # Закрываем RabbitMQ, если открыт
+            await self.rabbitmq.close()
             logger.info("RabbitMQ connection closed")
-        await self.db.close()  # Закрываем MongoDB
+        await self.db.close()
         logger.info("All connections closed")
 
-class ReloadHandler(FileSystemEventHandler):
-    """Обработчик событий изменения конкретного файла для перезапуска"""
-    def __init__(self, service: TransactionService, target_file: str):
-        self.service = service
-        self.target_file = os.path.abspath(target_file)  # Полный путь к файлу
-        self.loop = asyncio.get_event_loop()
+def run_consumer_process(stop_event):
+    async def async_run():
+        service = TransactionService()
+        try:
+            await service.run()
+        except Exception as e:
+            logger.error(f"Consumer process failed: {e}", exc_info=True)
+        finally:
+            await service.shutdown()
 
-    def on_modified(self, event):
-        """Вызывается при изменении файла"""
-        if not event.is_directory and os.path.abspath(event.src_path) == self.target_file:
-            logger.info(f"Target file {self.target_file} modified, restarting...")
-            asyncio.ensure_future(self.stop_and_restart(), loop=self.loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(async_run())
+    except KeyboardInterrupt:
+        logger.info("Consumer process interrupted")
+    finally:
+        loop.close()
 
-    async def stop_and_restart(self):
-        """Останавливает сервис и перезапускает программу"""
-        if self.service.running:
-            await self.service.shutdown()
-            logger.info("Restarting application...")
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+def main():
+    NUM_PROCESSES = 30
+    processes = []
+    stop_events = []
 
-async def main() -> None:
-    """Точка входа в приложение с поддержкой перезапуска"""
-    service = TransactionService()
-    
-    # Указываем конкретный файл для отслеживания (замените на имя вашего файла)
-    target_file = "consumer.py"  # Имя текущего файла 
-    event_handler = ReloadHandler(service, target_file)
-    
-    # Настройка наблюдателя только для директории с целевым файлом
-    observer = Observer()
-    observer.schedule(event_handler, path=os.path.dirname(os.path.abspath(target_file)), recursive=False)
-    observer.start()
-    logger.info(f"File watcher started, monitoring {target_file} for changes...")
+    for _ in range(NUM_PROCESSES):
+        stop_event = Event()
+        process = Process(target=run_consumer_process, args=(stop_event,))
+        processes.append(process)
+        stop_events.append(stop_event)
+        process.start()
+
+    logger.info(f"Started {NUM_PROCESSES} consumer processes")
+
+    def signal_handler(sig, frame):
+        logger.info("Received shutdown signal, stopping processes...")
+        for stop_event in stop_events:
+            stop_event.set()
+        for process in processes:
+            process.terminate()
+            process.join()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        await service.run()
-    except KeyboardInterrupt:
-        logger.info("Service stopped by user")
-        observer.stop()
+        for process in processes:
+            process.join()
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
-        observer.stop()
+        logger.error(f"Main process error: {e}")
     finally:
-        observer.stop()
-        observer.join()
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

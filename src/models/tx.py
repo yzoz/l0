@@ -12,7 +12,7 @@ def check_non_empty(value: str) -> str:
 # Определяем тип NonEmptyStr
 NonEmptyStr = Annotated[str, AfterValidator(check_non_empty)]
 class Tx(BaseModel):
-    parents: Annotated[List[NonEmptyStr], MinLen(2), MaxLen(5)]
+    parents: Annotated[List[NonEmptyStr], MinLen(2), MaxLen(10)]
     credit: str
     debit: str
     amount: PositiveInt

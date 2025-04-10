@@ -14,7 +14,6 @@ async def lifespan(app: FastAPI):
     app.state.rabbit = RabbitMQ(host='localhost', queue_name='tx')
     await app.state.rabbit.connect()
     app.state.pool = redis.Redis(host='localhost', db=0)
-    app.state.home = redis.Redis(host='localhost', db=1)
     yield
     # Закрытие подключений
     app.state.db.client.close()
