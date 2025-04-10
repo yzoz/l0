@@ -14,6 +14,10 @@ class MongoDB:
     async def insert_tx(self, tx: Tx):
         result = await self.async_txs.insert_one(dict(tx))
         return result.inserted_id
+    
+    def insert_tx_sync(self, tx: Tx):
+        result = self.txs.insert_one(dict(tx))
+        return result.inserted_id
 
     async def find_one(self, query: dict):
         return await self.async_txs.find_one(query)

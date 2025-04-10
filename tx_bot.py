@@ -36,7 +36,7 @@ async def arange(count):
     """Генератор для асинхронного перебора чисел."""
     for i in range(count):
         yield i
-        await asyncio.sleep(round(random.uniform(0, 0.5), 2))
+        await asyncio.sleep(round(random.uniform(0, 0.15), 2))
 
 async def send(in_set):
     """Отправка случайных транзакций."""
@@ -48,7 +48,7 @@ async def send(in_set):
         a = random.randint(1, 1000000000)  # сумма
         u = str(uuid.uuid4())  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
-        p = await client.get('http://127.0.0.1:8000/pool')
+        p = await client.get('http://192.168.1.8:8000/pool')
         r = p.json()
         # Формируем транзакцию
         c = Tx(
@@ -68,7 +68,7 @@ async def send(in_set):
         }
         logger.info(f"Sending transaction: {json.dumps(tx, indent=2)}")
         logger.info("_" * 80)
-        r = await client.post('http://127.0.0.1:8000/send/', data=json.dumps(tx))
+        r = await client.post('http://192.168.1.8:8000/send/', data=json.dumps(tx))
         logger.info("_" * 80)
         logger.info(f"Response: {r.text}")
 

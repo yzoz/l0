@@ -14,12 +14,12 @@ services:
     ports:
       - "27017:27017"
 
-  redis:
-    image: redis:latest
-    container_name: redis
-    hostname: redis
+  keydb:
+    image: eqalpha/keydb:latest
+    command: keydb-server /etc/keydb/keydb.conf --server-threads 10 --bind 0.0.0.0
     ports:
       - "6379:6379"
+
   influxdb2:
     image: influxdb:2
     container_name: influx
