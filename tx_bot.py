@@ -36,7 +36,7 @@ async def arange(count):
     """Генератор для асинхронного перебора чисел."""
     for i in range(count):
         yield i
-        await asyncio.sleep(round(random.uniform(0, 0.15), 2))
+        await asyncio.sleep(round(random.uniform(0, 0.1), 2))
 
 async def send(in_set):
     """Отправка случайных транзакций."""

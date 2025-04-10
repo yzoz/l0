@@ -21,9 +21,8 @@ async def pool(pool = Depends(get_pool)):
     tx_hashes = await pool.zrange("unconfirmed", 0, -1, withscores=False) #-1 - все, N до какого
     parents = []
     if len(tx_hashes) > 10: N = 3
-    if len(tx_hashes) > 25: N = 4
-    if len(tx_hashes) > 100: N = 5
-    if len(tx_hashes) > 250: N = 10
+    if len(tx_hashes) > 25: N = 5
+    if len(tx_hashes) > 100: N = 10
     for tx_hash in tx_hashes:
         tx_hash = tx_hash.decode()
         parents.append(tx_hash)
