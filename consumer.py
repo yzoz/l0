@@ -69,6 +69,7 @@ class TransactionProcessor:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
             await message.nack(requeue=False)
         if self.count % self.config.CLEAR == 0:
+            print(self.count)
             await self.check_pool()
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
