@@ -18,14 +18,17 @@ async def get_parents(r, n = 2) -> list[str]:
 @router.get("/pool")
 async def pool(pool = Depends(get_pool)):
     N = 2
+    P = 0
     tx_hashes = await pool.zrange("unconfirmed", 0, -1, withscores=False) #-1 - все, N до какого
     parents = []
-    if len(tx_hashes) > 10: N = 3
-    if len(tx_hashes) > 25: N = 5
-    if len(tx_hashes) > 100: N = 10
+    if len(tx_hashes) > 10: N = 3; P = 4
+    if len(tx_hashes) > 25: N = 5; P = 12
+    if len(tx_hashes) > 50: N = 7; P = 30
+    if len(tx_hashes) > 100: N = 10; P = 50
     for tx_hash in tx_hashes:
         tx_hash = tx_hash.decode()
         parents.append(tx_hash)
-        if len(parents) == N:
+        if len(parents) == N + P:
             break
-    return parents
+    random.shuffle(parents)
+    return parents[:N]

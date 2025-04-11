@@ -31,4 +31,4 @@ class MongoDB:
 
     async def close(self):
         self.client.close()
-        self.async_client.close()
+        await self.async_client.close()

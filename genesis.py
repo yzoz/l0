@@ -48,6 +48,7 @@ async def main():
         r.set(f"pool:{h}", m)
         r.zadd("unconfirmed", {h: 0})
         r.set(f"refs:{h}", "0")
+        r.set(f"time:{h}", d["time"])
         value = r.get(f"pool:{h}")
         w = json.loads(value.decode("utf-8"))
         print(w)
