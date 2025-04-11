@@ -1,4 +1,5 @@
 .idea
 env
+lib
 tests/lib
 __pycache__

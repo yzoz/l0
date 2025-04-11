@@ -17,40 +17,7 @@ services:
   keydb:
     image: eqalpha/keydb:latest
     command: keydb-server /etc/keydb/keydb.conf --server-threads 10 --bind 0.0.0.0
+    container_name: keydb
+    hostname: keydb
     ports:
       - "6379:6379"
-
-  influxdb2:
-    image: influxdb:2
-    container_name: influx
-    hostname: influx
-    ports:
-      - "127.0.0.1:8086:8086"
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME_FILE: /run/secrets/influxdb2-admin-username
-      DOCKER_INFLUXDB_INIT_PASSWORD_FILE: /run/secrets/influxdb2-admin-password
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: /run/secrets/influxdb2-admin-token
-      DOCKER_INFLUXDB_INIT_ORG: docs
-      DOCKER_INFLUXDB_INIT_BUCKET: home
-    secrets:
-      - influxdb2-admin-username
-      - influxdb2-admin-password
-      - influxdb2-admin-token
-    volumes:
-      - type: volume
-        source: influxdb2-data
-        target: /var/lib/influxdb2
-      - type: volume
-        source: influxdb2-config
-        target: /etc/influxdb2
-secrets:
-  influxdb2-admin-username:
-    file: .env.influxdb2-admin-username
-  influxdb2-admin-password:
-    file: .env.influxdb2-admin-password
-  influxdb2-admin-token:
-    file: .env.influxdb2-admin-token
-volumes:
-  influxdb2-data:
-  influxdb2-config:

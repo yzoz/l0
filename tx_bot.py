@@ -10,7 +10,7 @@ import logging
 
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 # Асинхронный HTTP-клиент
@@ -36,7 +36,7 @@ async def arange(count):
     """Генератор для асинхронного перебора чисел."""
     for i in range(count):
         yield i
-        await asyncio.sleep(round(random.uniform(0, 0.1), 2))
+        await asyncio.sleep(round(random.uniform(0, 0.005), 2))
 
 async def send(in_set):
     """Отправка случайных транзакций."""
@@ -66,15 +66,15 @@ async def send(in_set):
             "content": dict(c),
             "sign": s
         }
-        logger.info(f"Sending transaction: {json.dumps(tx, indent=2)}")
-        logger.info("_" * 80)
+        #logger.info(f"Sending transaction: {json.dumps(tx, indent=2)}")
+        #logger.info("_" * 80)
         r = await client.post('http://192.168.1.8:8000/send/', data=json.dumps(tx))
-        logger.info("_" * 80)
-        logger.info(f"Response: {r.text}")
+        #logger.info(f"Response: {r.text}")
 
 async def main():
     """Основная функция для запуска генератора транзакций."""
     in_set = input("Enter the number of transactions to send: ")
+    
     await asyncio.gather(*[send(in_set) for _ in range(10)])
 
 if __name__ == "__main__":

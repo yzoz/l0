@@ -14,6 +14,7 @@ import redis.asyncio as redis
 import sys
 from multiprocessing import Process, Event
 import signal
+import os
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +33,7 @@ class RedisClient:
         self.client: Optional[redis.Redis] = None
 
     async def connect(self) -> None:
-        self.client = await redis.Redis(host='localhost', db=0)  # Единая база
+        self.client = await redis.Redis(host='localhost', db=0, decode_responses=True)  # Единая база
 
     async def close(self) -> None:
         if self.client:
@@ -48,7 +49,6 @@ class TransactionProcessor:
 
     async def process_message(self, message: IncomingMessage) -> None:
         """Обрабатывает входящее сообщение из RabbitMQ"""
-        logger.info(f"{'_' * 80}\nNew message received")  # Разделитель в логах
         try:
             tx = self.parse_message(message)  # Парсим сообщение в объект
             await self.process_transaction(tx, message)  # Обрабатываем транзакцию
@@ -71,6 +71,11 @@ class TransactionProcessor:
 
     async def process_transaction(self, tx: TxStore, message: IncomingMessage) -> None:
         """Основная логика обработки одной транзакции"""
+
+        if len(await self.redis.client.zrange("unconfirmed", 0, -1, withscores=False)) > 250:
+            logger.info(f"Unconfirmed > 250")
+            return await message.nack(requeue=False)
+        
         # Проверяем, не является ли транзакция дубликатом
         if await self.check_duplicate(tx):
             return await message.nack(requeue=False)
@@ -84,8 +89,10 @@ class TransactionProcessor:
             return await message.nack(requeue=False)
 
         # Выполняем пуллинг и обновляем данные
-        await self.execute_pooling(tx)
-        await message.ack()  # Подтверждаем успешную обработку
+        if await self.execute_pooling(tx):
+            return await message.ack()  # Подтверждаем успешную обработку
+        else:
+            return await message.nack(requeue=False)
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -112,7 +119,7 @@ class TransactionProcessor:
                 balance = await asyncio.wait_for(get_balance(credit, self.db), timeout=0.5) or 0
                 await self.redis.client.set(balance_key, balance)
             else:
-                balance = int(balance.decode("utf-8"))
+                balance = int(balance)
             return balance
         except asyncio.TimeoutError:
             logger.error(f"Timeout fetching balance for {credit}")
@@ -132,39 +139,50 @@ class TransactionProcessor:
     async def execute_pooling(self, tx: TxStore) -> None:
         """Добавляет транзакцию в пул, обновляет балансы и обрабатывает родителей"""
         tx_hash = hash_hex(ordered_sum(dict(tx)))
-        tx_data = dict(tx, time=int(time.time_ns() / 1000))
+        now=int(time.time_ns() / 1000)
+
         pool_key = f"pool:{tx_hash}"
         refs_key = f"refs:{tx_hash}"
+        time_key = f"time:{tx_hash}"
         balance_debit_key = f"balance:{tx.debit}"
         balance_credit_key = f"balance:{tx.credit}"
         unconfirmed_key = "unconfirmed"
+
+        if self.redis.client.exists(pool_key) and tx.credit != self.config.DEV_ADDRESS:
+            return False
+        
+        tx_data = dict(tx, time=now)
 
         async with self.redis.client.pipeline() as pipe:
 
             await pipe.set(pool_key, json.dumps(tx_data))
             await pipe.zadd(unconfirmed_key, {tx_hash: 0})
             await pipe.set(refs_key, "0")
+            await pipe.set(time_key, now)
             await pipe.incrby(balance_debit_key, tx.amount)
             await pipe.decrby(balance_credit_key, tx.amount)
             try:
                 await pipe.execute()
             except Exception as e:
                 logger.error(f"Pipeline failed: {e}")
-                raise
+                return False
 
         logger.info(f"Transaction pooled: {tx_hash}")
         await self.handle_parent(tx.parents)
+
+        return True
 
     async def handle_parent(self, parents: str) -> None:
         """Обрабатывает список родителей, увеличивая их счетчики ссылок"""
         for parent_hash in parents:
             pool_key = f"pool:{parent_hash}"
             refs_key = f"refs:{parent_hash}"
-            if await self.redis.client.get(pool_key):
+            if self.redis.client.exists(pool_key):
                 async with self.redis.client.pipeline() as pipe:
                     await pipe.incr(refs_key)
                     await pipe.zincrby("unconfirmed", 1, parent_hash)
                     await pipe.execute()
+                
 
 class TransactionService:
     def __init__(self):
@@ -178,7 +196,7 @@ class TransactionService:
         self.running = True
         try:
             await self.startup()
-            logger.info("Service started. Processing messages...")
+            logger.info(f"Consumer process {os.getpid()} started")
             await self.rabbitmq.consume_messages(self.processor.process_message)
         except Exception as e:
             logger.error(f"Service error: {e}", exc_info=True)
@@ -189,7 +207,6 @@ class TransactionService:
     async def startup(self) -> None:
         await self.redis.connect()
         await self.rabbitmq.connect()
-        logger.info("Connected to RabbitMQ and Redis")
 
     async def shutdown(self) -> None:
         self.running = False
@@ -220,7 +237,7 @@ def run_consumer_process(stop_event):
         loop.close()
 
 def main():
-    NUM_PROCESSES = 30
+    NUM_PROCESSES = 10
     processes = []
     stop_events = []
 
