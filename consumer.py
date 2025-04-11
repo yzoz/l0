@@ -107,9 +107,9 @@ class TransactionProcessor:
     async def get_balance(self, credit: str) -> int:
         balance_key = f"balance:{credit}"
         try:
-            balance = await asyncio.wait_for(self.redis.client.get(balance_key), timeout=5.0)
+            balance = await asyncio.wait_for(self.redis.client.get(balance_key), timeout=0.5)
             if balance is None:
-                balance = await asyncio.wait_for(get_balance(credit, self.db), timeout=5.0) or 0
+                balance = await asyncio.wait_for(get_balance(credit, self.db), timeout=0.5) or 0
                 await self.redis.client.set(balance_key, balance)
             else:
                 balance = int(balance.decode("utf-8"))
@@ -117,17 +117,6 @@ class TransactionProcessor:
         except asyncio.TimeoutError:
             logger.error(f"Timeout fetching balance for {credit}")
             return 0
-        
-    async def get_balance(self, credit: str) -> int:
-        """Получает или обновляет баланс аккаунта"""
-        balance_key = f"balance:{credit}"
-        balance = await self.redis.client.get(balance_key)  # Проверяем Redis
-        if balance is None:  # Если в Redis нет данных
-            balance = await get_balance(credit, self.db) or 0  # Запрашиваем из базы
-            await self.redis.client.set(balance_key, balance)  # Кэшируем в Redis
-        else:
-            balance = int(balance)  # Декодируем из байтов
-        return balance
 
     async def verify_parents(self, tx: TxStore) -> bool:
         """Проверяет наличие всех родительских транзакций в пуле или home"""
