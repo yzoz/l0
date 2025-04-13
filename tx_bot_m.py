@@ -43,8 +43,8 @@ async def arange(count):
     for i in range(count):
         yield i
         await asyncio.sleep(0.1)
-        if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 0.1), 3))
-        if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 0.25), 3))
+        if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 0.25), 3))
+        if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 0.5), 3))
         #await asyncio.sleep(round(random.uniform(0.01, 0.05), 3))
         """await asyncio.sleep(random.randint(0, 30))
         if i % 2 == 0: await asyncio.sleep(random.randint(0, 30))
@@ -92,7 +92,7 @@ async def send(in_set):
 async def run_sender(in_set):
     """Запуск 10 параллельных корутин в одном процессе."""
     async with httpx.AsyncClient() as client:
-        await asyncio.gather(*[send(in_set) for _ in range(10)]) #250
+        await asyncio.gather(*[send(in_set) for _ in range(25)]) #250
 
 def process_target(in_set):
     """Функция-цель для каждого процесса."""

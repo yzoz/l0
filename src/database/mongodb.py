@@ -1,34 +1,51 @@
-from pymongo import MongoClient
 from motor.motor_asyncio import AsyncIOMotorClient
 from src.models.tx import Tx
+from typing import List
+from pymongo import WriteConcern
 
 class MongoDB:
-    def __init__(self, host='localhost', port=27017, db_name='feo'):
-        self.client = MongoClient(host, port)
-        self.async_client = AsyncIOMotorClient(host, port)
-        self.db = self.client[db_name]
-        self.async_db = self.async_client[db_name]
-        self.txs = self.db.tx
-        self.async_txs = self.async_db.tx
+    def __init__(self):
+        self.client = None
+        self.db = None
+        self.tx = None
+
+    async def connect(self):
+        self.client = AsyncIOMotorClient(
+            'localhost',
+            27017,
+            #maxPoolSize=10000,
+            #minPoolSize=1000,
+            #maxIdleTimeMS=30000,
+            #socketTimeoutMS=2000,
+            #connectTimeoutMS=2000
+        )
+        self.db = self.client['feo']
+        self.tx = self.db.tx
+        # Создаем индекс на поле hash
+        await self.tx.create_index("hash")
+        await self.tx.create_index([("credit", 1), ("uniq", 1)])
 
     async def insert_tx(self, tx: Tx):
-        result = await self.async_txs.insert_one(dict(tx))
-        return result.inserted_id
+        #result = await self.tx.with_options(write_concern=WriteConcern(w=0)).insert_one(dict(tx))
+        result = await self.tx.insert_one(dict(tx))
+        return result.acknowledged
     
-    def insert_tx_sync(self, tx: Tx):
-        result = self.txs.insert_one(dict(tx))
-        return result.inserted_id
+    async def insert_many_tx(self, txs: List[Tx]) -> bool:
+        if not txs:
+            return True
+        result = await self.tx.insert_many([dict(tx) for tx in txs])
+        return result.acknowledged
 
     async def find_one(self, query: dict):
-        return await self.async_txs.find_one(query)
+        return await self.tx.find_one(query)
 
     async def aggregate(self, pipeline: list):
-        result = await self.async_txs.aggregate(pipeline).to_list(1)
+        result = await self.tx.aggregate(pipeline).to_list(1)
         return result if result else None  # Упрощаем возврат результата
 
     async def find(self, query: dict, skip: int, limit: int):
-        return await self.async_txs.find(query).skip(skip).limit(limit).to_list(None)
+        return await self.tx.find(query).skip(skip).limit(limit).to_list(None)
 
     async def close(self):
-        self.client.close()
-        await self.async_client.close()
+        if self.client:
+            self.client.close()

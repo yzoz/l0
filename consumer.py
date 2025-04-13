@@ -7,7 +7,7 @@ from typing import Optional
 from aio_pika import IncomingMessage
 from src.database.queues import RabbitMQ
 from src.database.mongodb import MongoDB
-from src.models.tx import TxStore, TxWrite
+from src.models.tx import TxStore
 from src.utils.data import hash_hex, ordered_sum
 from src.utils.balance import get_balance
 import redis.asyncio as redis
@@ -72,8 +72,8 @@ class TransactionProcessor:
     async def process_transaction(self, tx: TxStore, message: IncomingMessage) -> None:
         """Основная логика обработки одной транзакции"""
 
-        if len(await self.redis.client.zrange("unconfirmed", 0, -1, withscores=False)) > 250:
-            logger.info(f"Unconfirmed > 250")
+        if len(await self.redis.client.zrange("unconfirmed", 0, -1, withscores=False)) > 1000:
+            logger.info(f"Unconfirmed > 1000")
             return await message.nack(requeue=False)
         
         # Проверяем, не является ли транзакция дубликатом
@@ -207,6 +207,7 @@ class TransactionService:
     async def startup(self) -> None:
         await self.redis.connect()
         await self.rabbitmq.connect()
+        await self.db.connect()
 
     async def shutdown(self) -> None:
         self.running = False
