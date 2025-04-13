@@ -13,11 +13,11 @@ async def lifespan(app: FastAPI):
     app.state.db = MongoDB()
     app.state.rabbit = RabbitMQ(host='localhost', queue_name='tx')
     await app.state.rabbit.connect()
+    await app.state.db.connect()
     app.state.pool = redis.Redis(host='localhost', db=0)
     yield
     # Закрытие подключений
-    app.state.db.client.close()
-    await app.state.db.async_client.close()
+    await app.state.db.client.close()
     await app.state.rabbit.close()
 
 app = FastAPI(lifespan=lifespan)
@@ -35,7 +35,3 @@ app.include_router(root.router)
 app.include_router(transactions.router)
 app.include_router(pool.router)
 app.include_router(graphql.router, prefix="/graphql")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
