@@ -42,9 +42,9 @@ async def arange(count):
     """Генератор для асинхронного перебора чисел."""
     for i in range(count):
         yield i
-        await asyncio.sleep(0.1)
-        if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 0.25), 3))
-        if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 0.5), 3))
+        await asyncio.sleep(0.5)
+        #if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 2.5), 3))
+        #if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 5), 3))
         #await asyncio.sleep(round(random.uniform(0.01, 0.05), 3))
         """await asyncio.sleep(random.randint(0, 30))
         if i % 2 == 0: await asyncio.sleep(random.randint(0, 30))
@@ -65,7 +65,8 @@ async def send(in_set):
         u = str(uuid.uuid4())  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
         try:
-            p = await client.get('http://192.168.1.8:8000/pool')
+            #p = await client.get('http://192.168.1.8:8000/pool')
+            p = await client.get('http://localhost:8000/pool')
             r = p.json()
             # Формируем транзакцию
             tx = Tx(
@@ -84,7 +85,8 @@ async def send(in_set):
                 "sign": s
             }
             #logger.info(f"Sending transaction: {json.dumps(tx_data, indent=2)}")
-            r = await client.post('http://192.168.1.8:8000/send/', data=json.dumps(tx_data))
+            #r = await client.post('http://192.168.1.8:8000/send/', data=json.dumps(tx_data))
+            r = await client.post('http://localhost:8000/send/', data=json.dumps(tx_data))
             #logger.info(f"Response: {r.text}")
         except Exception as e:
             logger.error(f"Error in send: {e}")
@@ -92,7 +94,7 @@ async def send(in_set):
 async def run_sender(in_set):
     """Запуск 10 параллельных корутин в одном процессе."""
     async with httpx.AsyncClient() as client:
-        await asyncio.gather(*[send(in_set) for _ in range(25)]) #250
+        await asyncio.gather(*[send(in_set) for _ in range(1)]) #250
 
 def process_target(in_set):
     """Функция-цель для каждого процесса."""
@@ -108,7 +110,7 @@ def process_target(in_set):
 def main():
     """Основная функция для запуска многопроцессного генератора транзакций."""
     in_set = input("Enter the number of transactions to send per coroutine: ")
-    num_processes = 25  # Количество процессов (можно настроить)
+    num_processes = 1  # Количество процессов (можно настроить)
 
     processes = []
     for _ in range(num_processes):
