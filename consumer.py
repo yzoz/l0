@@ -147,6 +147,7 @@ class TransactionProcessor:
         return True
 
     async def add_to_graph(self, tx_hash: str, parents: list) -> bool:
+        #async with self.redis.client.lock(f"lock:graph:{tx_hash}"):
         """Добавляет транзакцию в граф и проверяет на циклы"""
         adj_key = f"graph:adj:{tx_hash}"
         async with self.redis.client.pipeline() as pipe:
@@ -197,16 +198,16 @@ class TransactionProcessor:
         return await dfs(start_node)
 
     async def confirm_transaction(self, tx: TxStore, tx_hash: str) -> bool:
-        """Подтверждает транзакцию: обновляет балансы, сохраняет в MongoDB"""
+        """Подтверждает транзакцию: обновляет балансы, счётчики"""
         now = int(time.time_ns() / 1000)
         pool_key = f"pool:{tx_hash}"
-        refs_key = f"refs:{tx_hash}"
         time_key = f"time:{tx_hash}"
         balance_debit_key = f"balance:{tx.debit}"
         balance_credit_key = f"balance:{tx.credit}"
         unconfirmed_key = "unconfirmed"
 
         if await self.redis.client.exists(pool_key) and tx.credit != self.config.DEV_ADDRESS:
+            logger.info(f"Transaction here: {tx_hash}")
             return False
 
         tx_data = dict(tx, time=now)
@@ -214,7 +215,6 @@ class TransactionProcessor:
         async with self.redis.client.pipeline() as pipe:
             await pipe.set(pool_key, json.dumps(tx_data))
             await pipe.zadd(unconfirmed_key, {tx_hash: 0})
-            await pipe.set(refs_key, "0")
             await pipe.set(time_key, now)
             await pipe.incrby(balance_debit_key, tx.amount)
             await pipe.decrby(balance_credit_key, tx.amount)
@@ -223,23 +223,15 @@ class TransactionProcessor:
             except Exception as e:
                 logger.error(f"Pipeline failed: {e}")
                 return False
-
-        # Сохранение в MongoDB
-        await self.db.insert_one({"tx_hash": tx_hash, **dict(tx)})
-        logger.info(f"Transaction confirmed: {tx_hash}")
-        await self.handle_parent(tx.parents)
-        return True
-
-    async def handle_parent(self, parents: list) -> None:
+        
         """Обновляет счётчики ссылок для родителей"""
-        for parent_hash in parents:
-            pool_key = f"pool:{parent_hash}"
-            refs_key = f"refs:{parent_hash}"
-            if await self.redis.client.exists(pool_key):
-                async with self.redis.client.pipeline() as pipe:
-                    await pipe.incr(refs_key)
-                    await pipe.zincrby("unconfirmed", 1, parent_hash)
-                    await pipe.execute()
+        async with self.redis.client.pipeline() as pipe:
+            for parent_hash in tx.parents:
+                await pipe.zincrby("unconfirmed", 1, parent_hash)
+            await pipe.execute()
+
+        logger.info(f"Transaction confirmed: {tx_hash}")
+        return True
 
 class TransactionService:
     def __init__(self):
@@ -295,7 +287,7 @@ def run_consumer_process(stop_event):
         loop.close()
 
 def main():
-    NUM_PROCESSES = 10
+    NUM_PROCESSES = 1
     processes = []
     stop_events = []
 
