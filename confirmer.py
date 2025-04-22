@@ -63,7 +63,7 @@ class ConfirmationProcessor:
     async def periodic_check_pool(self):
         while True:
             await self.check_pool()
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.1)
 
 class ConfirmationService:
     def __init__(self):

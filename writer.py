@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class TransactionConfig:
-    WEIGHT: int = 10.0
+    WEIGHT: int = 25.0
 
 class ConfirmationProcessor:
     def __init__(self, db: MongoDB, redis_client: Redis, dag: Dag):
@@ -38,41 +38,25 @@ class ConfirmationProcessor:
         confirmed = [node for node in self.dag.G.nodes if self.dag.G.nodes[node]['weight'] >= self.config.WEIGHT]
 
         for node in confirmed:
-            tx_key = f"tx:{node}"
-            time_key = f"time:{node}"
-
-            # Проверяем ключи одним pipeline
-            async with self.redis.client.pipeline() as pipe:
-                await pipe.get(tx_key)
-                await pipe.get(time_key)
-                tx_data, tx_time = await pipe.execute()
-
-            confirmed_tx = self.create_tx(node, tx_data)
+            confirmed_tx = self.create_tx(node, self.dag.G.nodes[node]['data'])
             success = await self.db.insert_tx(confirmed_tx)
             logger.info(f"Confirmed TX saved: {node}" if success else f"Failed to save: {node}")
             if success:
-                async with self.redis.client.pipeline() as pipe:
-                    await pipe.delete(tx_key)
-                    await pipe.delete(time_key)
-                    await pipe.execute()
                 self.dag.G.remove_node(node)
+                await self.dag.save(self.redis, self.dag.G)
 
-        if confirmed:
-            await self.dag.save(self.redis, self.dag.G)
+        if confirmed: 
             print(len(self.dag.G.nodes))
 
-    def create_tx(self, hash: str, data: bytes) -> TxWrite:
-        try:
-            tx_dict = json.loads(data.decode(encoding="utf-8"))
-            tx_dict["hash"] = hash
-            return TxWrite(**tx_dict)
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Failed to parse transaction data for {hash}: {e}")
+    def create_tx(self, hash: str, data: dict) -> TxWrite:
+        tx_dict = data
+        tx_dict["hash"] = hash
+        return TxWrite(**tx_dict)
 
     async def periodic_check_pool(self):
         while True:
             await self.check_pool()
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(0.1)
 
 class ConfirmationService:
     def __init__(self):
