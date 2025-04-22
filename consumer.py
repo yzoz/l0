@@ -62,35 +62,35 @@ class TransactionProcessor:
 
     async def process_transaction(self, tx: TxStore, message: IncomingMessage) -> None:
         tx_hash = hash_hex(ordered_sum(dict(tx)))
-        async with self.redis.client.lock(f"lock:{tx_hash}"):
-            await self.dag.load(self.redis)
-            """Основная логика обработки одной транзакции"""
-            
+        #async with self.redis.client.lock(f"lock:{tx_hash}"):
+        await self.dag.load(self.redis)
+        """Основная логика обработки одной транзакции"""
+        
 
-            # Проверка лимита неподтверждённых транзакций
-            
+        # Проверка лимита неподтверждённых транзакций
+        
 
-            # Проверка дубликатов
-            if await self.check_duplicate(tx):
-                return await message.nack(requeue=False)
+        # Проверка дубликатов
+        if await self.check_duplicate(tx):
+            return await message.nack(requeue=False)
 
-            # Проверка баланса
-            if not await self.verify_balance(tx):
-                return await message.nack(requeue=False)
+        # Проверка баланса
+        if not await self.verify_balance(tx):
+            return await message.nack(requeue=False)
 
-            # Проверка наличия родителей
-            if not await self.verify_parents(tx):
-                return await message.nack(requeue=False)
+        # Проверка наличия родителей
+        if not await self.verify_parents(tx):
+            return await message.nack(requeue=False)
 
-            # Проверка на циклы и добавление в граф
-            if not await self.add_to_graph(tx_hash, tx.parents):
-                return await message.nack(requeue=False)
+        # Проверка на циклы и добавление в граф
+        if not await self.add_to_graph(tx_hash, tx):
+            return await message.nack(requeue=False)
 
-            # Подтверждение транзакции
-            if await self.confirm_transaction(tx, tx_hash):
-                await message.ack()
-            else:
-                await message.nack(requeue=False)
+        # Подтверждение транзакции
+        if await self.confirm_transaction(tx, tx_hash):
+            await message.ack()
+        else:
+            await message.nack(requeue=False)
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -131,36 +131,30 @@ class TransactionProcessor:
             return False
         return True
 
-    async def add_to_graph(self, tx_hash: str, parents: list) -> bool:
+    async def add_to_graph(self, tx_hash: str, tx: TxStore) -> bool:
         # Check for cycles
         G_temp = self.dag.G.copy()
         G_temp.add_node(tx_hash)
-        for parent in parents:
+        for parent in tx.parents:
             G_temp.add_edge(parent, tx_hash)
         if not nx.is_directed_acyclic_graph(G_temp):
             logger.error(f"Cycle detected for {tx_hash}")
             return False
 
         # Add transaction to graph
-        self.dag.G.add_node(tx_hash, weight=1.0)
-        for parent in parents:
+        now = int(time.time_ns() / 1000)
+        tx_data = dict(tx, time=now)
+        self.dag.G.add_node(tx_hash, weight=0.0, data=tx_data)
+        for parent in tx.parents:
             self.dag.G.add_edge(parent, tx_hash)
         await self.dag.save(self.redis, self.dag.G)
         return True
 
     async def confirm_transaction(self, tx: TxStore, tx_hash: str) -> bool:
-        """Подтверждает транзакцию: обновляет балансы, счётчики"""
-        now = int(time.time_ns() / 1000)
-        pool_key = f"tx:{tx_hash}"
-        time_key = f"time:{tx_hash}"
+        """Подтверждает транзакцию: обновляет балансы"""  
         balance_debit_key = f"balance:{tx.debit}"
         balance_credit_key = f"balance:{tx.credit}"
-
-        tx_data = dict(tx, time=now)
-
         async with self.redis.client.pipeline() as pipe:
-            await pipe.set(pool_key, json.dumps(tx_data))
-            await pipe.set(time_key, now)
             await pipe.incrby(balance_debit_key, tx.amount)
             await pipe.decrby(balance_credit_key, tx.amount)
             try:
