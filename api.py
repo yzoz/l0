@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from src.database.mongodb import MongoDB
 from src.database.queues import RabbitMQ
+from src.database.redis import Redis
 from src.api.routers import transactions, root, graphql, pool
 import redis.asyncio as redis
 
@@ -12,13 +13,15 @@ async def lifespan(app: FastAPI):
     # Инициализация подключений к БД и очередям
     app.state.db = MongoDB()
     app.state.rabbit = RabbitMQ(host='localhost', queue_name='tx')
+    app.state.redis = Redis()
     await app.state.rabbit.connect()
     await app.state.db.connect()
-    app.state.pool = redis.Redis(host='localhost', db=0)
+    await app.state.redis.connect()
     yield
     # Закрытие подключений
     await app.state.db.client.close()
     await app.state.rabbit.close()
+    await app.state.redis.close()
 
 app = FastAPI(lifespan=lifespan)
 

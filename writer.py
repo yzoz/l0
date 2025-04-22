@@ -1,17 +1,19 @@
-import asyncio
 import json
 import logging
-import os
-import time
-import hashlib
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional
 from src.database.mongodb import MongoDB
 from src.models.tx import TxWrite
-import redis.asyncio as redis
+from src.database.redis import Redis
+from src.utils.graph import Dag
 from multiprocessing import Process, Event
 import signal
 import sys
+import os
+import asyncio
+import random
+import time
+import hashlib
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,81 +21,65 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class RedisClient:
-    def __init__(self):
-        self.client: Optional[redis.Redis] = None
+@dataclass(frozen=True)
+class TransactionConfig:
+    WEIGHT: int = 10.0
 
-    async def connect(self) -> None:
-        self.client = await redis.Redis(host='localhost', db=0, decode_responses=True)
-
-    async def close(self) -> None:
-        if self.client:
-            await self.client.aclose()
-
-class WriterProcessor:
-    def __init__(self, db: MongoDB, redis_client: RedisClient, process_id: int, total_processes: int):
+class ConfirmationProcessor:
+    def __init__(self, db: MongoDB, redis_client: Redis, dag: Dag):
         self.db = db
         self.redis = redis_client
-        self.process_id = process_id
-        self.total_processes = total_processes
-        self.written = 0
+        self.dag = dag
+        self.config = TransactionConfig()
 
-    def _should_process(self, key: str) -> bool:
-        """Определяет, должен ли текущий процесс обрабатывать этот ключ"""
-        hash_value = int(hashlib.sha256(key.encode()).hexdigest(), 16)
-        return (hash_value % self.total_processes) == self.process_id
+    async def check_pool(self):
+        await self.dag.load(self.redis)
 
-    async def write_batch(self) -> None:
-        # Получаем ключи с префиксом write:*
-        keys = await self.redis.client.keys("write:*")
-        relevant_keys = [k for k in keys if self._should_process(k)]
-        if not relevant_keys:
-            return
+        confirmed = [node for node in self.dag.G.nodes if self.dag.G.nodes[node]['weight'] >= self.config.WEIGHT]
 
-        BATCH_SIZE = 100
-        for batch in [relevant_keys[i:i + BATCH_SIZE] for i in range(0, len(relevant_keys), BATCH_SIZE)]:
-            # Получаем данные одним pipeline
+        for node in confirmed:
+            tx_key = f"tx:{node}"
+            time_key = f"time:{node}"
+
+            # Проверяем ключи одним pipeline
             async with self.redis.client.pipeline() as pipe:
-                for key in batch:
-                    await pipe.get(key)
-                data_list = await pipe.execute()
+                await pipe.get(tx_key)
+                await pipe.get(time_key)
+                tx_data, tx_time = await pipe.execute()
 
-            to_write = []
-            tx_hashes = []
-            for key, data in zip(batch, data_list):
-                if data:
-                    tx_hash = key.replace("write:", "")
-                    try:
-                        tx_dict = json.loads(data)
-                        tx_dict["hash"] = tx_hash
-                        to_write.append(TxWrite(**tx_dict))
-                        tx_hashes.append(key)
-                    except (json.JSONDecodeError, TypeError) as e:
-                        logger.error(f"Failed to parse data for {tx_hash}: {e}")
+            confirmed_tx = self.create_tx(node, tx_data)
+            success = await self.db.insert_tx(confirmed_tx)
+            logger.info(f"Confirmed TX saved: {node}" if success else f"Failed to save: {node}")
+            if success:
+                async with self.redis.client.pipeline() as pipe:
+                    await pipe.delete(tx_key)
+                    await pipe.delete(time_key)
+                    await pipe.execute()
+                self.dag.G.remove_node(node)
 
-            # Батчевая запись в MongoDB
-            if to_write:
-                success = await self.db.insert_many_tx(to_write)
-                self.written += len(to_write)
-                logger.info(f"Written {len(to_write)} TXs to MongoDB, total: {self.written}")
-                if success:
-                    # Удаляем успешно записанные ключи
-                    async with self.redis.client.pipeline() as pipe:
-                        for key in tx_hashes:
-                            await pipe.delete(key)
-                            #await pipe.set(f"home:{key}", "1")
-                        await pipe.execute()
+        if confirmed:
+            await self.dag.save(self.redis, self.dag.G)
+            print(len(self.dag.G.nodes))
 
-    async def periodic_write(self):
+    def create_tx(self, hash: str, data: bytes) -> TxWrite:
+        try:
+            tx_dict = json.loads(data.decode(encoding="utf-8"))
+            tx_dict["hash"] = hash
+            return TxWrite(**tx_dict)
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Failed to parse transaction data for {hash}: {e}")
+
+    async def periodic_check_pool(self):
         while True:
-            await self.write_batch()
-            await asyncio.sleep(0.1)  # Интервал для уменьшения нагрузки
+            await self.check_pool()
+            await asyncio.sleep(2.5)
 
-class WriterService:
-    def __init__(self, process_id: int, total_processes: int):
+class ConfirmationService:
+    def __init__(self):
         self.db = MongoDB()
-        self.redis = RedisClient()
-        self.processor = WriterProcessor(self.db, self.redis, process_id, total_processes)
+        self.redis = Redis()
+        self.dag = Dag()
+        self.processor = ConfirmationProcessor(self.db, self.redis, self.dag)
         self.running = False
 
     async def run(self) -> None:
@@ -101,7 +87,7 @@ class WriterService:
         try:
             await self.startup()
             logger.info(f"Writer process {os.getpid()} started")
-            await self.processor.periodic_write()
+            await self.processor.periodic_check_pool()
         except Exception as e:
             logger.error(f"Service error: {e}", exc_info=True)
             raise
@@ -111,6 +97,7 @@ class WriterService:
     async def startup(self) -> None:
         await self.redis.connect()
         await self.db.connect()
+        await self.dag.load(self.redis)
 
     async def shutdown(self) -> None:
         self.running = False
@@ -118,13 +105,14 @@ class WriterService:
         await self.db.close()
         logger.info("All connections closed")
 
-def run_writer_process(process_id: int, total_processes: int, stop_event):
+def run_confirmation_process(stop_event):
+    """Запускает асинхронный цикл для одного процесса"""
     async def async_run():
-        service = WriterService(process_id, total_processes)
+        service = ConfirmationService()
         try:
             await service.run()
         except Exception as e:
-            logger.error(f"Writer process failed: {e}", exc_info=True)
+            logger.error(f"Confirmation process failed: {e}", exc_info=True)
         finally:
             await service.shutdown()
 
@@ -133,24 +121,26 @@ def run_writer_process(process_id: int, total_processes: int, stop_event):
     try:
         loop.run_until_complete(async_run())
     except KeyboardInterrupt:
-        logger.info("Writer process interrupted")
+        logger.info("Confirmation process interrupted")
     finally:
         loop.close()
 
 def main():
-    NUM_PROCESSES = 5  # Используем число CPU ядер
+    NUM_PROCESSES = 1  # Количество процессов
     processes = []
     stop_events = []
 
+    # Создаем процессы
     for i in range(NUM_PROCESSES):
         stop_event = Event()
-        process = Process(target=run_writer_process, args=(i, NUM_PROCESSES, stop_event))
+        process = Process(target=run_confirmation_process, args=(stop_event,))
         processes.append(process)
         stop_events.append(stop_event)
         process.start()
 
-    logger.info(f"Started {NUM_PROCESSES} writer processes")
+    logger.info(f"Started {NUM_PROCESSES} confirmation processes")
 
+    # Обработка сигналов для graceful shutdown
     def signal_handler(sig, frame):
         logger.info("Received shutdown signal, stopping processes...")
         for stop_event in stop_events:

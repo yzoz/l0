@@ -1,15 +1,19 @@
 from src.models.tx import TxStore
 import asyncio
-import redis
+from src.database.redis import Redis
 import json
 import time
 from src.utils.data import hash_hex, ordered_sum
+from src.utils.graph import Dag
+
 from pymongo import MongoClient
 cli = MongoClient('localhost', 27017)
-
 db = cli.feo
 txs = db.tx
 txs.drop()
+
+redis = Redis()
+dag = Dag()
 
 tx = [TxStore(
     parents = ["0","1","2"],
@@ -38,24 +42,19 @@ tx = [TxStore(
 )]
 
 async def main():
-    r = redis.Redis(host='localhost', db=0)
-    r.flushall()
+    await redis.connect()
+    await redis.client.flushall()
+    await dag.load(redis)
     for t in tx:
         d = dict(t)
         h = hash_hex(ordered_sum(dict(d)))
         d["time"] = int(time.time_ns() / 1000)
         m = json.dumps(dict(d))
-        r.set(f"pool:{h}", m)
-        r.sadd("graph:nodes", h)
-        for parent_hash in t.parents:
-            r.sadd(f"graph:adj:{h}", parent_hash)
-        r.zadd("unconfirmed", {h: 0})
-        r.set(f"time:{h}", d["time"])
-        value = r.get(f"pool:{h}")
-        w = json.loads(value.decode("utf-8"))
-        print(w)
-        #await r.delete(h)
-
+        dag.G.add_node(h, weight=0.0)
+        await redis.client.set(f"tx:{h}", m)
+        await dag.save(redis, dag.G)
+        await dag.load(redis)
+    print(dag.G.nodes(data=True))
 
 if __name__ == "__main__":
     asyncio.run(main())
