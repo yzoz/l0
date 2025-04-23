@@ -18,19 +18,14 @@ dependencies = [
     "aio-pika (>=9.5.5,<10.0.0)",
     "pymongo (>=4.11.2,<5.0.0)",
     "redis[hiredis] (>=5.2.1,<6.0.0)",
-#    "pytest (>=7.4.0,<8.0.0)",
-#    "pytest-asyncio (>=0.26.0,<0.27.0)",
-#    "fakeredis (>=2.23.0,<3.0.0)"
-"watchdog (>=6.0.0,<7.0.0)",
-"networkx (>=3.4.2,<4.0.0)"
+    "watchdog (>=6.0.0,<7.0.0)",
+    "networkx (>=3.4.2,<4.0.0)"
 ]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
 pytest-asyncio = "^0.26.0"
 fakeredis = "^2.23"
-pymongo = "^4.8"
-aio-pika = "^9.5.5"
 
 [tool.poetry.scripts]
 fast = "fastapi run api.py --workers=3"
