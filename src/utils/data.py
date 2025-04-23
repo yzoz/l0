@@ -7,5 +7,7 @@ def hash_hex(t: str) -> str:
 def ordered_sum(t: dict) -> str:
     s = dict(sorted(t.items()))
     m = ''
-    for t in s.values(): m += str(t)
+    for t in s.values():
+        if isinstance(t, list): t = "".join(sorted(t))
+        m += str(t)
     return m

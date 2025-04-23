@@ -1,3 +1,6 @@
 .idea
+.pytest_cache
+.vscode
 env
+lib
 __pycache__
