@@ -25,7 +25,7 @@ pipeline = [
             "connectToField": "parents",  # Ищем в массиве parents
             "as": "descendants",
             "depthField": "level",
-            "maxDepth": 25
+            "maxDepth": 100
         }
     }
 ]
@@ -101,3 +101,36 @@ options = {
 net.set_options(json.dumps(options))
 net.save_graph("multi_parent_graph.html")
 print("Граф сохранён")
+
+"""
+options = {
+    "physics": {
+        "barnesHut": {
+            "gravitationalConstant": -8000,
+            "springLength": 250,
+            "centralGravity": 0.3
+        },
+        "minVelocity": 0.75
+    },
+    "edges": {
+        "arrows": "to",
+        "smooth": {"type": "continuous"}
+    }
+}
+
+for depth in range(0, 11, 5):  # 0-5, 5-10 и т.д.
+    pipeline[1]["$graphLookup"]["maxDepth"] = depth
+    result = list(collection.aggregate(pipeline))[0]
+    # Создание и сохранение графа как "graph_depth_{depth}.html"
+"""
+"""
+# Визуализация
+pos = nx.spring_layout(G)  # Расположение узлов
+labels = nx.get_node_attributes(G, "amount")  # Метки с суммами
+
+plt.figure(figsize=(10, 7))
+nx.draw(G, pos, with_labels=True, node_color="lightblue", node_size=2000, font_size=12, arrows=True)
+nx.draw_networkx_labels(G, pos, labels=labels)
+plt.title("Transaction Graph")
+plt.show()
+"""

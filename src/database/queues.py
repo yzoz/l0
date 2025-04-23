@@ -1,7 +1,5 @@
-import asyncio
 import logging
 from aio_pika import connect_robust, Message, DeliveryMode
-import aiormq
 
 class RabbitMQ:
     def __init__(self, host='localhost', queue_name='tx'):
@@ -21,8 +19,8 @@ class RabbitMQ:
                 durable=True,
                 arguments={"x-dead-letter-exchange": "", "x-dead-letter-routing-key": "tx"}
             )
-        except aiormq.exceptions.ChannelClosedByBroker:
-            logging.error("Channel closed by broker")
+        except Exception as e:
+            logging.error(e)
 
     async def publish_message(self, message: str):
         """Публикация сообщения в очередь."""

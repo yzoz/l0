@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 import random
-from src.utils.graph import Dag
+from src.database.graph import Dag
 
 router = APIRouter()
 dag = Dag()

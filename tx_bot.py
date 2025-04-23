@@ -13,7 +13,7 @@ from keys import pk, sk
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.ERROR,
+    level=logging.WARNING,
     format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -72,14 +72,14 @@ async def send(in_set):
             logger.info(f"Sending transaction: {json.dumps(tx_data, indent=2)}")
             #r = await client.post('http://192.168.1.8:8000/send/', data=json.dumps(tx_data))
             r = await client.post('http://localhost:8000/send/', data=json.dumps(tx_data))
-            #logger.info(f"Response: {r.text}")
+            logger.info(f"Response: {r.text}")
         except Exception as e:
             logger.error(f"Error in send: {e}")
 
 async def run_sender(in_set):
     """Запуск 10 параллельных корутин в одном процессе."""
     async with httpx.AsyncClient() as client:
-        await asyncio.gather(*[send(in_set) for _ in range(5)]) #250
+        await asyncio.gather(*[send(in_set) for _ in range(1)]) #250
 
 def process_target(in_set):
     """Функция-цель для каждого процесса."""
@@ -95,7 +95,7 @@ def process_target(in_set):
 def main():
     """Основная функция для запуска многопроцессного генератора транзакций."""
     in_set = input("Enter the number of transactions to send per coroutine: ")
-    num_processes = 5  # Количество процессов (можно настроить)
+    num_processes = 1  # Количество процессов (можно настроить)
 
     processes = []
     for _ in range(num_processes):

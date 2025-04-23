@@ -3,7 +3,7 @@ import asyncio
 from src.database.redis import Redis
 import time
 from src.utils.data import hash_hex, ordered_sum
-from src.utils.graph import Dag
+from src.database.graph import Dag
 import networkx as nx
 
 from pymongo import MongoClient
