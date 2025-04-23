@@ -1,7 +1,15 @@
 from motor.motor_asyncio import AsyncIOMotorClient
-from src.models.tx import Tx
+from src.models.tx import TxWrite
 from typing import List
 from pymongo import WriteConcern
+import logging
+from pymongo.errors import DuplicateKeyError
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class MongoDB:
     def __init__(self):
@@ -25,12 +33,12 @@ class MongoDB:
         await self.tx.create_index("hash", unique=True)
         await self.tx.create_index([("credit", 1), ("uniq", 1)])
 
-    async def insert_tx(self, tx: Tx):
+    async def insert_tx(self, tx: TxWrite):
         #result = await self.tx.with_options(write_concern=WriteConcern(w=0)).insert_one(dict(tx))
         result = await self.tx.insert_one(dict(tx))
         return result.acknowledged
     
-    async def insert_many_tx(self, txs: List[Tx]) -> bool:
+    async def insert_many_tx(self, txs: List[TxWrite]) -> bool:
         if not txs:
             return True
         result = await self.tx.insert_many([dict(tx) for tx in txs])

@@ -1,4 +1,3 @@
-import json
 import logging
 from dataclasses import dataclass
 from src.database.mongodb import MongoDB
@@ -10,6 +9,7 @@ import signal
 import sys
 import os
 import asyncio
+from pymongo.errors import DuplicateKeyError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,29 +21,46 @@ logger = logging.getLogger(__name__)
 class TransactionConfig:
     WEIGHT: int = 25.0
 
-class ConfirmationProcessor:
-    def __init__(self, db: MongoDB, redis_client: Redis, dag: Dag):
+class WriterProcessor:
+    def __init__(self, db: MongoDB, redis: Redis, dag: Dag):
         self.db = db
-        self.redis = redis_client
+        self.redis = redis
         self.dag = dag
         self.config = TransactionConfig()
 
     async def check_pool(self):
-        await self.dag.load(self.redis)
+        async with self.redis.client.lock("graph:check_pool"):
 
-        confirmed = [node for node in self.dag.G.nodes if self.dag.G.nodes[node]['weight'] >= self.config.WEIGHT]
+            await self.dag.load(self.redis)
 
-        for node in confirmed:
-            async with self.redis.client.lock(f"mongo:{node}"):
-                confirmed_tx = self.create_tx(node, self.dag.G.nodes[node]['data'])
-                success = await self.db.insert_tx(confirmed_tx)
-                logger.info(f"Confirmed TX saved: {node}" if success else f"Failed to save: {node}")
-                if success:
-                    self.dag.G.remove_node(node)
-                    await self.dag.save(self.redis, self.dag.G)
+            confirmed = [node for node in self.dag.G.nodes if self.dag.G.nodes[node]['weight'] >= self.config.WEIGHT]
 
-        if confirmed: 
-            print(len(self.dag.G.nodes))
+            for node in confirmed:
+                async with self.redis.client.lock(f"mongo:{node}", timeout=10, blocking_timeout=5):
+                    tx = self.create_tx(node, self.dag.G.nodes[node]['data'])
+                    try:
+                        success = await self.db.insert_tx(tx)
+                        logger.info(f"Confirmed TX saved: {tx.hash}" if success else f"Failed to save: {tx.hash}")
+                        if success:
+                            self.dag.G.remove_node(node)
+                            await self.dag.save(self.redis, self.dag.G)
+                            """Обновляет балансы"""  
+                            balance_debit_key = f"balance:{tx.debit}"
+                            balance_credit_key = f"balance:{tx.credit}"
+                            async with self.redis.client.pipeline() as pipe:
+                                await pipe.incrby(balance_debit_key, tx.amount)
+                                await pipe.decrby(balance_credit_key, tx.amount)
+                                try:
+                                    await pipe.execute()
+                                except Exception as e:
+                                    logger.error(f"Pipeline failed: {e}")
+                                    return False
+
+                            logger.info(f"Transaction confirmed: {tx.hash}")
+                    except DuplicateKeyError:
+                        logger.warning(f"Duplicate key error for hash: {tx.hash}")
+                        self.dag.G.remove_node(node)
+                        await self.dag.save(self.redis, self.dag.G)
 
     def create_tx(self, hash: str, data: dict) -> TxWrite:
         tx_dict = data
@@ -55,12 +72,12 @@ class ConfirmationProcessor:
             await self.check_pool()
             await asyncio.sleep(0.1)
 
-class ConfirmationService:
+class WriterService:
     def __init__(self):
         self.db = MongoDB()
         self.redis = Redis()
         self.dag = Dag()
-        self.processor = ConfirmationProcessor(self.db, self.redis, self.dag)
+        self.processor = WriterProcessor(self.db, self.redis, self.dag)
         self.running = False
 
     async def run(self) -> None:
@@ -86,14 +103,14 @@ class ConfirmationService:
         await self.db.close()
         logger.info("All connections closed")
 
-def run_confirmation_process(stop_event):
+def run_writer_process(stop_event):
     """Запускает асинхронный цикл для одного процесса"""
     async def async_run():
-        service = ConfirmationService()
+        service = WriterService()
         try:
             await service.run()
         except Exception as e:
-            logger.error(f"Confirmation process failed: {e}", exc_info=True)
+            logger.error(f"Writer process failed: {e}", exc_info=True)
         finally:
             await service.shutdown()
 
@@ -102,7 +119,7 @@ def run_confirmation_process(stop_event):
     try:
         loop.run_until_complete(async_run())
     except KeyboardInterrupt:
-        logger.info("Confirmation process interrupted")
+        logger.info("Writer process interrupted")
     finally:
         loop.close()
 
@@ -114,12 +131,12 @@ def main():
     # Создаем процессы
     for i in range(NUM_PROCESSES):
         stop_event = Event()
-        process = Process(target=run_confirmation_process, args=(stop_event,))
+        process = Process(target=run_writer_process, args=(stop_event,))
         processes.append(process)
         stop_events.append(stop_event)
         process.start()
 
-    logger.info(f"Started {NUM_PROCESSES} confirmation processes")
+    logger.info(f"Started {NUM_PROCESSES} writer processes")
 
     # Обработка сигналов для graceful shutdown
     def signal_handler(sig, frame):

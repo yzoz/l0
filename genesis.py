@@ -51,6 +51,7 @@ async def main():
         d["time"] = int(time.time_ns() / 1000)
         m = dict(d)
         G.add_node(h, weight=0.0, data=m)
+        await redis.client.set(f"balance:{t.debit}", t.amount)
         await dag.save(redis, G)
         #await asyncio.sleep(1.0)
         await dag.load(redis)
