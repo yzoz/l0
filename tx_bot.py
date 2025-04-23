@@ -94,7 +94,7 @@ async def send(in_set):
 async def run_sender(in_set):
     """Запуск 10 параллельных корутин в одном процессе."""
     async with httpx.AsyncClient() as client:
-        await asyncio.gather(*[send(in_set) for _ in range(1)]) #250
+        await asyncio.gather(*[send(in_set) for _ in range(5)]) #250
 
 def process_target(in_set):
     """Функция-цель для каждого процесса."""
@@ -110,7 +110,7 @@ def process_target(in_set):
 def main():
     """Основная функция для запуска многопроцессного генератора транзакций."""
     in_set = input("Enter the number of transactions to send per coroutine: ")
-    num_processes = 1  # Количество процессов (можно настроить)
+    num_processes = 5  # Количество процессов (можно настроить)
 
     processes = []
     for _ in range(num_processes):

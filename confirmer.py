@@ -1,7 +1,6 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Optional
 from src.database.mongodb import MongoDB
 from src.models.tx import TxWrite
 from src.database.redis import Redis
@@ -11,9 +10,6 @@ import signal
 import sys
 import os
 import asyncio
-import random
-import time
-import hashlib
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,12 +49,12 @@ class ConfirmationProcessor:
             self.dag.G.nodes[node]['weight'] = own_weight + indirect_weight
 
         await self.dag.save(self.redis, self.dag.G)
-        sorted_nodes = sorted(
+        '''sorted_nodes = sorted(
             self.dag.G.nodes(data=True),
             key=lambda x: x[1]['weight']
         )
         print("-" * 100)
-        print(sorted_nodes)
+        print(sorted_nodes)'''
 
     async def periodic_check_pool(self):
         while True:
@@ -117,7 +113,7 @@ def run_confirmation_process(stop_event):
         loop.close()
 
 def main():
-    NUM_PROCESSES = 1  # Количество процессов
+    NUM_PROCESSES = 5  # Количество процессов
     processes = []
     stop_events = []
 

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from aio_pika import connect_robust, Message, DeliveryMode, IncomingMessage
+from aio_pika import connect_robust, Message, DeliveryMode
 import aiormq
 
 class RabbitMQ:

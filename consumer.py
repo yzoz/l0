@@ -62,35 +62,35 @@ class TransactionProcessor:
 
     async def process_transaction(self, tx: TxStore, message: IncomingMessage) -> None:
         tx_hash = hash_hex(ordered_sum(dict(tx)))
-        #async with self.redis.client.lock(f"lock:{tx_hash}"):
-        await self.dag.load(self.redis)
-        """Основная логика обработки одной транзакции"""
-        
+        async with self.redis.client.lock(f"rabbit:{tx_hash}"):
+            await self.dag.load(self.redis)
+            """Основная логика обработки одной транзакции"""
+            
 
-        # Проверка лимита неподтверждённых транзакций
-        
+            # Проверка лимита неподтверждённых транзакций
+            
 
-        # Проверка дубликатов
-        if await self.check_duplicate(tx):
-            return await message.nack(requeue=False)
+            # Проверка дубликатов
+            if await self.check_duplicate(tx):
+                return await message.nack(requeue=False)
 
-        # Проверка баланса
-        if not await self.verify_balance(tx):
-            return await message.nack(requeue=False)
+            # Проверка баланса
+            if not await self.verify_balance(tx):
+                return await message.nack(requeue=False)
 
-        # Проверка наличия родителей
-        if not await self.verify_parents(tx):
-            return await message.nack(requeue=False)
+            # Проверка наличия родителей
+            if not await self.verify_parents(tx):
+                return await message.nack(requeue=False)
 
-        # Проверка на циклы и добавление в граф
-        if not await self.add_to_graph(tx_hash, tx):
-            return await message.nack(requeue=False)
+            # Проверка на циклы и добавление в граф
+            if not await self.add_to_graph(tx_hash, tx):
+                return await message.nack(requeue=False)
 
-        # Подтверждение транзакции
-        if await self.confirm_transaction(tx, tx_hash):
-            await message.ack()
-        else:
-            await message.nack(requeue=False)
+            # Подтверждение транзакции
+            if await self.confirm_transaction(tx, tx_hash):
+                await message.ack()
+            else:
+                await message.nack(requeue=False)
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -169,7 +169,7 @@ class TransactionProcessor:
 class TransactionService:
     def __init__(self):
         self.db = MongoDB()
-        self.rabbitmq = RabbitMQ(host='localhost', queue_name='tx')
+        self.rabbitmq = RabbitMQ()
         self.redis = Redis()
         self.dag = Dag()
         self.processor = TransactionProcessor(self.db, self.rabbitmq, self.redis, self.dag)
@@ -222,7 +222,7 @@ def run_consumer_process(stop_event):
         loop.close()
 
 def main():
-    NUM_PROCESSES = 1
+    NUM_PROCESSES = 5
     processes = []
     stop_events = []
 

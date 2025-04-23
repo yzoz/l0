@@ -22,7 +22,7 @@ class MongoDB:
         self.db = self.client['feo']
         self.tx = self.db.tx
         # Создаем индекс на поле hash
-        await self.tx.create_index("hash")
+        await self.tx.create_index("hash", unique=True)
         await self.tx.create_index([("credit", 1), ("uniq", 1)])
 
     async def insert_tx(self, tx: Tx):
