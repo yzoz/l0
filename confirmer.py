@@ -29,34 +29,27 @@ class ConfirmationProcessor:
         self.config = TransactionConfig()
 
     async def check_pool(self):
-        async with self.redis.client.lock("graph:check_pool"):  # Глобальная блокировка
-            await self.dag.load(self.redis)
+        await self.dag.load(self.redis)
 
-            def calculate_indirect_weight(node, depth=0, visited=None):
-                if visited is None:
-                    visited = set()
-                if node in visited:
-                    return 0.0
-                visited.add(node)
-                weight = 0.0
-                for child in self.dag.G.successors(node):
-                    weight += self.config.DAMPING ** depth
-                    weight += calculate_indirect_weight(child, depth + 1, visited.copy())
-                return weight
-            
-            for node in self.dag.G.nodes:
-                own_weight = 1.0
-                indirect_weight = calculate_indirect_weight(node)
-                self.dag.G.nodes[node]['weight'] = own_weight + indirect_weight
+        def calculate_indirect_weight(node, depth=0, visited=None):
+            if visited is None:
+                visited = set()
+            if node in visited:
+                return 0.0
+            visited.add(node)
+            weight = 0.0
+            for child in self.dag.G.successors(node):
+                weight += self.config.DAMPING ** depth
+                weight += calculate_indirect_weight(child, depth + 1, visited.copy())
+            return weight
+        
+        for node in self.dag.G.nodes:
+            own_weight = 1.0
+            indirect_weight = calculate_indirect_weight(node)
+            self.dag.G.nodes[node]['weight'] = own_weight + indirect_weight
 
-            await self.dag.save(self.redis, self.dag.G)
-            print(len(self.dag.G.nodes))
-            '''sorted_nodes = sorted(
-                self.dag.G.nodes(data=True),
-                key=lambda x: x[1]['weight']
-            )
-            print("-" * 100)
-            print(sorted_nodes)'''
+        await self.dag.save(self.redis, self.dag.G)
+        print(len(self.dag.G.nodes))
 
     async def periodic_check_pool(self):
         while True:

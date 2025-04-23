@@ -29,38 +29,43 @@ class WriterProcessor:
         self.config = TransactionConfig()
 
     async def check_pool(self):
-        async with self.redis.client.lock("graph:check_pool"):
+        #async with self.redis.client.lock("graph:check_pool"):
 
-            await self.dag.load(self.redis)
+        await self.dag.load(self.redis)
 
-            confirmed = [node for node in self.dag.G.nodes if self.dag.G.nodes[node]['weight'] >= self.config.WEIGHT]
+        confirmed = [node for node in self.dag.G.nodes if self.dag.G.nodes[node]['weight'] >= self.config.WEIGHT]
 
-            for node in confirmed:
-                async with self.redis.client.lock(f"mongo:{node}", timeout=10, blocking_timeout=5):
-                    tx = self.create_tx(node, self.dag.G.nodes[node]['data'])
-                    try:
-                        success = await self.db.insert_tx(tx)
-                        logger.info(f"Confirmed TX saved: {tx.hash}" if success else f"Failed to save: {tx.hash}")
-                        if success:
-                            self.dag.G.remove_node(node)
-                            await self.dag.save(self.redis, self.dag.G)
-                            """Обновляет балансы"""  
-                            balance_debit_key = f"balance:{tx.debit}"
-                            balance_credit_key = f"balance:{tx.credit}"
-                            async with self.redis.client.pipeline() as pipe:
-                                await pipe.incrby(balance_debit_key, tx.amount)
-                                await pipe.decrby(balance_credit_key, tx.amount)
-                                try:
-                                    await pipe.execute()
-                                except Exception as e:
-                                    logger.error(f"Pipeline failed: {e}")
-                                    return False
-
-                            logger.info(f"Transaction confirmed: {tx.hash}")
-                    except DuplicateKeyError:
-                        logger.warning(f"Duplicate key error for hash: {tx.hash}")
-                        self.dag.G.remove_node(node)
-                        await self.dag.save(self.redis, self.dag.G)
+        for node in confirmed:
+            lock = self.redis.client.lock(f"mongo:{node}", timeout=10)
+            acquired = await lock.acquire(blocking=False)  # Одна попытка без ожидания
+            if not acquired:
+                print(f"Failed to acquire lock for {node}")
+                return
+            tx = self.create_tx(node, self.dag.G.nodes[node]['data'])
+            try:
+                success = await self.db.insert_tx(tx)
+                logger.info(f"Confirmed TX saved: {tx.hash}" if success else f"Failed to save: {tx.hash}")
+                if success:
+                    self.dag.G.remove_node(node)
+                    await self.dag.save(self.redis, self.dag.G)
+                    """Обновляет балансы"""  
+                    balance_debit_key = f"balance:{tx.debit}"
+                    balance_credit_key = f"balance:{tx.credit}"
+                    async with self.redis.client.pipeline() as pipe:
+                        await pipe.incrby(balance_debit_key, tx.amount)
+                        await pipe.decrby(balance_credit_key, tx.amount)
+                        try:
+                            await pipe.execute()
+                        except Exception as e:
+                            logger.error(f"Pipeline failed: {e}")
+                            return False
+            except DuplicateKeyError:
+                logger.warning(f"Duplicate key error for hash: {tx.hash}")
+                self.dag.G.remove_node(node)
+                await self.dag.save(self.redis, self.dag.G)
+            finally:
+                if acquired:
+                    await lock.release()
 
     def create_tx(self, hash: str, data: dict) -> TxWrite:
         tx_dict = data
