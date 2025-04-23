@@ -7,7 +7,7 @@ from src.database.queues import RabbitMQ
 from src.database.mongodb import MongoDB
 from src.models.tx import TxWrite, TxStore
 from src.utils.data import hash_hex, ordered_sum
-from src.utils.balance import get_balance
+from src.utils.profile import get_balance
 import redis.asyncio as redis
 
 # Настройка логирования

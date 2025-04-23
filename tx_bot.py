@@ -1,6 +1,5 @@
 import asyncio
 import httpx
-from src.models.tx import Tx
 import uuid
 import random
 from src.utils.data import ordered_sum
@@ -10,6 +9,7 @@ import logging
 from multiprocessing import Process
 import sys
 import time
+from keys import pk, sk
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,29 +20,13 @@ logger = logging.getLogger(__name__)
 
 client = httpx.AsyncClient()
 
-# Список ключей (приватные и публичные)
-sk = [
-    'DF3998wbqyBn9uSA4BcMJQAkpnZb21a1vRLo9Nw8GwWy',
-    '8no9RFLqKkC5HSLmSqkTnrX6pD2Fn5MNNbJmdGP1GivQ',
-    '6savWyJQgcZEfDBt9N1u2dhPg68cng43zQFKgyM9qKDW',
-    'C8xjbHktooH8Pm1n57hHprfBSb4kxSfTcDS3ZZKBCTCR',
-    'GtTXBxARCLoRUFcmv5QtU6L1neQkRdivRXCEMuigKba5'
-]
-pk = [
-    'EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1',
-    'A9huRv7vtELAYQ4nQYtEWfn5NEdqXBUs722TdsiZR3ST',
-    '2RAHCZg7SfyLY6x5uLmtDh1tNbZr4w5NTPMWXpHrqdyc',
-    '9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy',
-    'RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR'
-]
-
 start = time.time()
 
 async def arange(count):
     """Генератор для асинхронного перебора чисел."""
     for i in range(count):
         yield i
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
         #if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 2.5), 3))
         #if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 5), 3))
         #await asyncio.sleep(round(random.uniform(0.01, 0.05), 3))
@@ -57,10 +41,11 @@ async def send(in_set):
     #await asyncio.sleep(random.randint(0, 30))
     """Отправка случайных транзакций в асинхронном режиме."""
     async for _ in arange(int(in_set)):
-        i = random.randint(0, 4)
+        n = len(sk) - 1
+        i = random.randint(0, n)
         c = pk[i]  # credit (отправитель)
         priv = sk[i]  # приватный ключ
-        d = pk[random.randint(0, 4)]  # debit (получатель)
+        d = pk[random.randint(0, n)]  # debit (получатель)
         a = random.randint(1, 1000000000)  # сумма
         u = str(uuid.uuid4())  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
@@ -69,7 +54,7 @@ async def send(in_set):
             p = await client.get('http://localhost:8000/pool')
             r = p.json()
             # Формируем транзакцию
-            tx = Tx(
+            tx = dict(
                 parents=r,
                 debit=d,
                 credit=c,
@@ -77,14 +62,14 @@ async def send(in_set):
                 uniq=u,
                 msg=m
             )
-            m = ordered_sum(dict(tx))  # строка для подписи
+            m = ordered_sum(tx)  # строка для подписи
             # Подпись транзакции
             s = sign_message(priv, m)
             tx_data = {
-                "content": dict(tx),
+                "content": tx,
                 "sign": s
             }
-            #logger.info(f"Sending transaction: {json.dumps(tx_data, indent=2)}")
+            logger.info(f"Sending transaction: {json.dumps(tx_data, indent=2)}")
             #r = await client.post('http://192.168.1.8:8000/send/', data=json.dumps(tx_data))
             r = await client.post('http://localhost:8000/send/', data=json.dumps(tx_data))
             #logger.info(f"Response: {r.text}")

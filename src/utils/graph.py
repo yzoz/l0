@@ -15,6 +15,3 @@ class Dag:
     # Функция для сохранения графа в Redis
     async def save(self, redis: Redis, G: nx.DiGraph):
         await redis.client.set("dag", pickle.dumps(G))
-
-    async def clear(self):
-        self.G = nx.DiGraph()

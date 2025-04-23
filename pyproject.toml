@@ -33,7 +33,7 @@ pymongo = "^4.8"
 aio-pika = "^9.5.5"
 
 [tool.poetry.scripts]
-fast = "api:app"
+fast = "fastapi run api.py --workers=3"
 txg = "python ./tx_generator.py"
 
 [build-system]

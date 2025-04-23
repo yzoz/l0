@@ -25,11 +25,11 @@ def not_equal_to_credit(value, info):
 
 # Ключ подходит для Ed25519
 def check_valid_key(value: str):
-    value = base58.b58decode(value)
-    if len(value) != 32:
+    b = base58.b58decode(value)
+    if len(b) != 32:
         raise ValueError("Public key must be 32 bytes")
     try:
-        VerifyKey(value)
+        VerifyKey(b)
     except ValueError as e:
         raise ValueError("Invalid Ed25519 public key") from e
     return value
