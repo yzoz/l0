@@ -1,35 +1,34 @@
 from fastapi import APIRouter, Depends, Request
 import random
+from src.database.graph import Dag
 
 router = APIRouter()
+dag = Dag()
 
-async def get_pool(request: Request):
-    return request.app.state.pool
-
-async def get_home(request: Request):
-    return request.app.state.home
+async def get_redis(request: Request):
+    return request.app.state.redis
 
 @router.get("/pool")
-async def pool(pool = Depends(get_pool), home = Depends(get_home)):
-    #mom_keys = mom.keys('*')
-    pool_list = []
-    cursor = 0
-    while True:
-        cursor, keys = await pool.scan(cursor=cursor, count=100)
-        for key in keys:
-            pool_list.append(key.decode('utf-8'))
-        if cursor == 0:
+async def pool(redis = Depends(get_redis)):
+    await dag.load(redis)
+    N = 2
+    P = 0
+    G = dag.G
+    sorted_nodes = sorted(
+        G.nodes(data=True),
+        key=lambda x: x[1]['weight']
+    )
+    parents = []
+    #num_parents = max(2, math.floor(math.sqrt(num_txs)))
+    if len(G.nodes) > 10: N = 3; P = 4
+    if len(G.nodes) > 25: N = 4; P = 12
+    if len(G.nodes) > 50: N = 5; P = 30
+    if len(G.nodes) > 100: N = 6; P = 50
+    if len(G.nodes) > 250: N = 8; P = 100
+    if len(G.nodes) > 500: N = 10; P = 250
+    for node, _ in sorted_nodes:
+        parents.append(node)
+        if len(parents) == N + P:
             break
-    if len(pool_list) < 2:
-        while True:
-            cursor, keys = await home.scan(cursor=cursor, count=100)
-            for key in keys:
-                pool_list.append(key.decode('utf-8'))
-            if cursor == 0:
-                break
-    while True:
-        mom = random.randint(0, len(pool_list) - 1)
-        dad = random.randint(0, len(pool_list) - 1)
-        variables = [mom, dad]
-        if len(set(variables)) == len(variables): break
-    return {"mom": pool_list[mom], "dad": pool_list[dad]}
+    random.shuffle(parents)
+    return parents[:N]

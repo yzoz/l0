@@ -1,7 +1,5 @@
-import asyncio
 import logging
-from aio_pika import connect_robust, Message, DeliveryMode, IncomingMessage
-import aiormq
+from aio_pika import connect_robust, Message, DeliveryMode
 
 class RabbitMQ:
     def __init__(self, host='localhost', queue_name='tx'):
@@ -14,14 +12,15 @@ class RabbitMQ:
         """Инициализация подключения к RabbitMQ с dead-letter очередью."""
         self.connection = await connect_robust(f"amqp://guest:guest@{self.host}/")
         self.channel = await self.connection.channel()
+        #await self.rabbitmq.channel.set_qos(prefetch_count=1)
         try: # Создание dead-letter очереди
             await self.channel.declare_queue(
                 "dead-letter",
                 durable=True,
                 arguments={"x-dead-letter-exchange": "", "x-dead-letter-routing-key": "tx"}
             )
-        except aiormq.exceptions.ChannelClosedByBroker:
-            logging.error("Channel closed by broker")
+        except Exception as e:
+            logging.error(e)
 
     async def publish_message(self, message: str):
         """Публикация сообщения в очередь."""

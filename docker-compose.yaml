@@ -5,52 +5,33 @@ services:
     hostname: rabbit
     ports:
       - "127.0.0.1:5672:5672"
-      - "127.0.0.1:15672:15672"
+      - "15672:15672"
 
   mongodb:
     image: mongo:latest
     container_name: mongo
     hostname: mongo
     ports:
-      - "127.0.0.1:27017:27017"
-
-  redis:
-    image: redis:latest
-    container_name: redis
-    hostname: redis
-    ports:
-      - "127.0.0.1:6379:6379"
-  influxdb2:
-    image: influxdb:2
-    container_name: influx
-    hostname: influx
-    ports:
-      - "127.0.0.1:8086:8086"
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME_FILE: /run/secrets/influxdb2-admin-username
-      DOCKER_INFLUXDB_INIT_PASSWORD_FILE: /run/secrets/influxdb2-admin-password
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: /run/secrets/influxdb2-admin-token
-      DOCKER_INFLUXDB_INIT_ORG: docs
-      DOCKER_INFLUXDB_INIT_BUCKET: home
-    secrets:
-      - influxdb2-admin-username
-      - influxdb2-admin-password
-      - influxdb2-admin-token
+      - "27017:27017"
     volumes:
-      - type: volume
-        source: influxdb2-data
-        target: /var/lib/influxdb2
-      - type: volume
-        source: influxdb2-config
-        target: /etc/influxdb2
-secrets:
-  influxdb2-admin-username:
-    file: .env.influxdb2-admin-username
-  influxdb2-admin-password:
-    file: .env.influxdb2-admin-password
-  influxdb2-admin-token:
-    file: .env.influxdb2-admin-token
+      - mongodb_data:/data/db
+    #  - ./mongo.conf:/etc/mongo.conf
+    #command: mongod --config /etc/mongo.conf
+    #deploy:
+    #  resources:
+    #    limits:
+    #      cpus: '16.0'
+    #      memory: 64G
+    environment:
+      - MONGO_INITDB_DATABASE=feo
+    restart: unless-stopped
+
+  keydb:
+    image: eqalpha/keydb:latest
+    command: keydb-server /etc/keydb/keydb.conf --server-threads 2 --bind 0.0.0.0
+    container_name: keydb
+    hostname: keydb
+    ports:
+      - "6379:6379"
 volumes:
-  influxdb2-data:
-  influxdb2-config:
+  mongodb_data:
