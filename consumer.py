@@ -84,12 +84,8 @@ class TransactionProcessor:
             # Проверка на циклы и добавление в граф
             if not await self.add_to_graph(tx_hash, tx):
                 return await message.nack(requeue=False)
-
-            # Подтверждение транзакции
-            if await self.confirm_transaction(tx, tx_hash):
-                await message.ack()
             else:
-                await message.nack(requeue=False)
+                await message.ack()
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -102,7 +98,7 @@ class TransactionProcessor:
     async def verify_balance(self, tx: TxStore) -> bool:
         """Проверяет, достаточно ли средств для выполнения транзакции"""
         balance = await get_balance(tx.credit, self.db, self.redis)
-        if balance < tx.amount and tx.credit not in self.config.DEV_ADDRESS:
+        if balance < tx.amount and tx.credit:
             logger.error(f"Insufficient funds: {balance} < {tx.amount} for {tx.credit}")
             return False
         return True
@@ -116,38 +112,23 @@ class TransactionProcessor:
 
     async def add_to_graph(self, tx_hash: str, tx: TxStore) -> bool:
         # Check for cycles
-        G_temp = self.dag.G.copy()
-        G_temp.add_node(tx_hash)
-        for parent in tx.parents:
-            G_temp.add_edge(parent, tx_hash)
-        if not nx.is_directed_acyclic_graph(G_temp):
-            logger.warning(f"Cycle detected for {tx_hash}")
-            return False
-
-        # Add transaction to graph
-        now = int(time.time_ns() / 1000)
-        tx_data = dict(tx, time=now)
-        self.dag.G.add_node(tx_hash, weight=0.0, data=tx_data)
-        for parent in tx.parents:
-            self.dag.G.add_edge(parent, tx_hash)
-        await self.dag.save(self.redis, self.dag.G)
-        return True
-
-    async def confirm_transaction(self, tx: TxStore, tx_hash: str) -> bool:
-        """Подтверждает транзакцию: обновляет балансы"""  
-        balance_debit_key = f"balance:{tx.debit}"
-        balance_credit_key = f"balance:{tx.credit}"
-        async with self.redis.client.pipeline() as pipe:
-            await pipe.incrby(balance_debit_key, tx.amount)
-            await pipe.decrby(balance_credit_key, tx.amount)
-            try:
-                await pipe.execute()
-            except Exception as e:
-                logger.error(f"Pipeline failed: {e}")
+        async with self.redis.client.lock("graph:check_pool"):
+            G_temp = self.dag.G.copy()
+            G_temp.add_node(tx_hash)
+            for parent in tx.parents:
+                G_temp.add_edge(parent, tx_hash)
+            if not nx.is_directed_acyclic_graph(G_temp):
+                logger.warning(f"Cycle detected for {tx_hash}")
                 return False
 
-        logger.info(f"Transaction confirmed: {tx_hash}")
-        return True
+            # Add transaction to graph
+            now = int(time.time_ns() / 1000)
+            tx_data = dict(tx, time=now)
+            self.dag.G.add_node(tx_hash, weight=0.0, data=tx_data)
+            for parent in tx.parents:
+                self.dag.G.add_edge(parent, tx_hash)
+            await self.dag.save(self.redis, self.dag.G)
+            return True
 
 class TransactionService:
     def __init__(self):
