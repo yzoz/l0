@@ -16,15 +16,15 @@ redis = Redis()
 dag = Dag()
 
 tx = [TxStore(
-    parents = ["0","1","2"],
-    debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
+    parents = ["0","1"],
+    debit = "11111111111111111111111111111111",
     credit = "",
     amount = 500000000000000,
     uniq = "",
     sign = "",
     msg = "genesis"
 ), TxStore(
-    parents = ["0","1","2"],
+    parents = ["0","1"],
     debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
     credit = "",
     amount = 330000000000000,
@@ -32,7 +32,7 @@ tx = [TxStore(
     sign = "",
     msg = "genesis2"
 ), TxStore(
-    parents = ["0","1","2"],
+    parents = ["0","1"],
     debit = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
     credit = "",
     amount = 250000000000000,
@@ -44,7 +44,7 @@ tx = [TxStore(
 async def main():
     await redis.connect()
     await redis.client.flushall()
-    await dag.load(redis)
+    await dag.clear()
     for t in tx:
         d = dict(t)
         h = hash_hex(ordered_sum(dict(d)))

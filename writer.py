@@ -1,7 +1,6 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Optional
 from src.database.mongodb import MongoDB
 from src.models.tx import TxWrite
 from src.database.redis import Redis
@@ -11,9 +10,6 @@ import signal
 import sys
 import os
 import asyncio
-import random
-import time
-import hashlib
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,12 +34,13 @@ class ConfirmationProcessor:
         confirmed = [node for node in self.dag.G.nodes if self.dag.G.nodes[node]['weight'] >= self.config.WEIGHT]
 
         for node in confirmed:
-            confirmed_tx = self.create_tx(node, self.dag.G.nodes[node]['data'])
-            success = await self.db.insert_tx(confirmed_tx)
-            logger.info(f"Confirmed TX saved: {node}" if success else f"Failed to save: {node}")
-            if success:
-                self.dag.G.remove_node(node)
-                await self.dag.save(self.redis, self.dag.G)
+            async with self.redis.client.lock(f"mongo:{node}"):
+                confirmed_tx = self.create_tx(node, self.dag.G.nodes[node]['data'])
+                success = await self.db.insert_tx(confirmed_tx)
+                logger.info(f"Confirmed TX saved: {node}" if success else f"Failed to save: {node}")
+                if success:
+                    self.dag.G.remove_node(node)
+                    await self.dag.save(self.redis, self.dag.G)
 
         if confirmed: 
             print(len(self.dag.G.nodes))
@@ -110,7 +107,7 @@ def run_confirmation_process(stop_event):
         loop.close()
 
 def main():
-    NUM_PROCESSES = 1  # Количество процессов
+    NUM_PROCESSES = 5  # Количество процессов
     processes = []
     stop_events = []
 
