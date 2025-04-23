@@ -3,7 +3,7 @@ import strawberry
 from typing import List, Optional
 from src.models.tx import TxSend
 from src.database.mongodb import MongoDB
-from src.utils.balance import get_balance  # Импортируем функцию
+from src.utils.profile import get_balance
 
 # Определение типа транзакции для GraphQL
 @strawberry.experimental.pydantic.type(model=TxSend, all_fields=True)

@@ -3,7 +3,6 @@ import json
 import time
 import logging
 from dataclasses import dataclass
-from typing import Optional, Set
 from aio_pika import IncomingMessage
 import networkx as nx
 from src.database.queues import RabbitMQ
@@ -12,7 +11,7 @@ from src.database.redis import Redis
 from src.utils.graph import Dag
 from src.models.tx import TxStore
 from src.utils.data import hash_hex, ordered_sum
-from src.utils.balance import get_balance
+from src.utils.profile import get_balance
 import sys
 from multiprocessing import Process, Event
 import signal
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class TransactionConfig:
     """Конфигурация параметров транзакций"""
-    DEV_ADDRESS: str = "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy"
+    DEV_ADDRESS: set = ("9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy", "RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR", "2RAHCZg7SfyLY6x5uLmtDh1tNbZr4w5NTPMWXpHrqdyc")
 
 class TransactionProcessor:
     """Класс, отвечающий за обработку транзакций и управление графом"""
@@ -96,36 +95,20 @@ class TransactionProcessor:
         """Проверяет, существует ли уже такая транзакция в базе"""
         exists = await self.db.find_one({"credit": tx.credit, "uniq": tx.uniq})
         if exists:
-            logger.info(f"Duplicate detected: {tx.uniq}")
+            logger.warning(f"Duplicate detected: {tx.uniq}")
             return True
         return False
 
     async def verify_balance(self, tx: TxStore) -> bool:
         """Проверяет, достаточно ли средств для выполнения транзакции"""
-        balance = await self.get_balance(tx.credit)
-        if balance < tx.amount and tx.credit != self.config.DEV_ADDRESS:
+        balance = await get_balance(tx.credit, self.db, self.redis)
+        if balance < tx.amount and tx.credit not in self.config.DEV_ADDRESS:
             logger.error(f"Insufficient funds: {balance} < {tx.amount} for {tx.credit}")
             return False
         return True
 
-    async def get_balance(self, credit: str) -> int:
-        """Получает баланс из Redis или MongoDB"""
-        balance_key = f"balance:{credit}"
-        try:
-            balance = await asyncio.wait_for(self.redis.client.get(balance_key), timeout=0.5)
-            if balance is None:
-                balance = await asyncio.wait_for(get_balance(credit, self.db), timeout=0.5) or 0
-                await self.redis.client.set(balance_key, balance)
-            else:
-                balance = int(balance)
-            return balance
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout fetching balance for {credit}")
-            return 0
-
     async def verify_parents(self, tx: TxStore) -> bool:
         """Проверяет наличие всех родительских транзакций"""
-        # Check if parents exist in the graph
         if not all(parent in self.dag.G.nodes for parent in tx.parents):
             logger.warning(f"One or more parents not found for transaction {tx.uniq}")
             return False
@@ -138,7 +121,7 @@ class TransactionProcessor:
         for parent in tx.parents:
             G_temp.add_edge(parent, tx_hash)
         if not nx.is_directed_acyclic_graph(G_temp):
-            logger.error(f"Cycle detected for {tx_hash}")
+            logger.warning(f"Cycle detected for {tx_hash}")
             return False
 
         # Add transaction to graph
