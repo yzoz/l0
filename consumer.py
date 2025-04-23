@@ -61,7 +61,7 @@ class TransactionProcessor:
 
     async def process_transaction(self, tx: TxStore, message: IncomingMessage) -> None:
         tx_hash = hash_hex(ordered_sum(dict(tx)))
-        async with self.redis.client.lock(f"rabbit:{tx_hash}"):
+        async with self.redis.client.lock(f"rabbit:{tx_hash}", timeout=10):
             await self.dag.load(self.redis)
             """Основная логика обработки одной транзакции"""
             
@@ -112,23 +112,22 @@ class TransactionProcessor:
 
     async def add_to_graph(self, tx_hash: str, tx: TxStore) -> bool:
         # Check for cycles
-        async with self.redis.client.lock("graph:check_pool"):
-            G_temp = self.dag.G.copy()
-            G_temp.add_node(tx_hash)
-            for parent in tx.parents:
-                G_temp.add_edge(parent, tx_hash)
-            if not nx.is_directed_acyclic_graph(G_temp):
-                logger.warning(f"Cycle detected for {tx_hash}")
-                return False
+        G_temp = self.dag.G.copy()
+        G_temp.add_node(tx_hash)
+        for parent in tx.parents:
+            G_temp.add_edge(parent, tx_hash)
+        if not nx.is_directed_acyclic_graph(G_temp):
+            logger.warning(f"Cycle detected for {tx_hash}")
+            return False
 
-            # Add transaction to graph
-            now = int(time.time_ns() / 1000)
-            tx_data = dict(tx, time=now)
-            self.dag.G.add_node(tx_hash, weight=0.0, data=tx_data)
-            for parent in tx.parents:
-                self.dag.G.add_edge(parent, tx_hash)
-            await self.dag.save(self.redis, self.dag.G)
-            return True
+        # Add transaction to graph
+        now = int(time.time_ns() / 1000)
+        tx_data = dict(tx, time=now)
+        self.dag.G.add_node(tx_hash, weight=0.0, data=tx_data)
+        for parent in tx.parents:
+            self.dag.G.add_edge(parent, tx_hash)
+        await self.dag.save(self.redis, self.dag.G)
+        return True
 
 class TransactionService:
     def __init__(self):
