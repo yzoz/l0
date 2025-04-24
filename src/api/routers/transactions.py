@@ -39,7 +39,7 @@ async def send(
 
         # Отправка в RabbitMQ с тайм-аутом
         try:
-            await asyncio.wait_for(rabbit.publish_message(message), timeout=RABBITMQ_TIMEOUT)
+            await asyncio.wait_for(rabbit.publish_message("tx", message), timeout=RABBITMQ_TIMEOUT)
             logger.info(f"Transaction successfully published: uniq={tx.content.uniq}")
         except asyncio.TimeoutError:
             logger.error(f"RabbitMQ timeout after {RABBITMQ_TIMEOUT}s: uniq={tx.content.uniq}")
