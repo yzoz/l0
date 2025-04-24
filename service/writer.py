@@ -36,7 +36,7 @@ class WriterProcessor:
             lock = self.redis.client.lock(f"mongo:{node}", timeout=10)
             acquired = await lock.acquire(blocking=False)  # Одна попытка без ожидания
             if not acquired:
-                print(f"Failed to acquire lock for {node}")
+                logger.info(f"Failed to acquire lock for {node}")
                 return
             tx = self.create_tx(node, self.dag.G.nodes[node]['data'])
             try:
