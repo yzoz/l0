@@ -3,7 +3,6 @@ import json
 import time
 import logging
 from aio_pika import IncomingMessage
-import networkx as nx
 from src.database.queues import RabbitMQ
 from src.database.mongodb import MongoDB
 from src.database.redis import Redis
@@ -21,16 +20,15 @@ logger = logging.getLogger(__name__)
 
 class ConsumerProcessor:
     """Класс, отвечающий за обработку транзакций и управление графом"""
-    def __init__(self, db: MongoDB, redis: Redis, dag: Memgraph):
+    def __init__(self, rabbit: RabbitMQ, db: MongoDB, redis: Redis, dag: Memgraph):
         self.db = db
+        self.rabbit = rabbit
         self.redis = redis
         self.dag = dag
 
     async def process_message(self, message: IncomingMessage) -> None:
         """Обрабатывает входящее сообщение из RabbitMQ"""
-        tx = self.parse_message(message)
-        await self.process_transaction(tx, message)
-        """try:
+        try:
             tx = self.parse_message(message)
             await self.process_transaction(tx, message)
         except json.JSONDecodeError:
@@ -41,7 +39,7 @@ class ConsumerProcessor:
             await message.nack(requeue=True)
         except Exception as e:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
-            await message.nack(requeue=False)"""
+            await message.nack(requeue=False)
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
         """Преобразует сырые данные сообщения в объект TxStore"""
@@ -53,7 +51,7 @@ class ConsumerProcessor:
     async def process_transaction(self, tx: TxStore, message: IncomingMessage) -> None:
         """Обрабатывает одну транзакцию"""
         tx_hash = hash_hex(ordered_sum(dict(tx)))
-        async with self.redis.client.lock(f"rabbit:{tx_hash}", timeout=10):
+        async with self.redis.client.lock(f"rabbit:{tx_hash}"):
             # Проверка дубликатов
             if await self.check_duplicate(tx):
                 logger.warning(f"Duplicate transaction: {tx_hash}")
@@ -80,6 +78,12 @@ class ConsumerProcessor:
 
             await message.ack()
             logger.info(f"Transaction {tx_hash} processed and added to graph")
+            # Отправка в RabbitMQ с тайм-аутом
+            try:
+                await asyncio.wait_for(self.rabbit.publish_message("dag", tx_hash), timeout=1)
+                logger.info(f"Transaction successfully published: {tx_hash}")
+            except asyncio.TimeoutError:
+                logger.error(f"RabbitMQ timeout after {1}s: {tx_hash}")
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -118,7 +122,7 @@ class ConsumerProcessor:
                         hash: $hash,
                         own_weight: 1.0,
                         weight: 1.0,
-                        data: {}
+                        data: $data
                     })
                     """,
                     hash=tx_hash,
@@ -155,16 +159,16 @@ class ConsumerProcessor:
                 
                 return True
             except Exception as e:
-                logger.error(f"Service error: {e}", exc_info=True)
+                logger.error(f"Service error: {e}")
                 return False 
 
 class ConsumerService:
     def __init__(self):
         self.db = MongoDB()
-        self.rabbitmq = RabbitMQ()
+        self.rabbit = RabbitMQ()
         self.redis = Redis()
         self.dag = Memgraph()
-        self.processor = ConsumerProcessor(self.db, self.redis, self.dag)
+        self.processor = ConsumerProcessor(self.rabbit, self.db, self.redis, self.dag)
         self.running = False
 
     async def run(self) -> None:
@@ -172,7 +176,7 @@ class ConsumerService:
         try:
             await self.startup()
             logger.info(f"Consumer process {os.getpid()} started")
-            await self.rabbitmq.consume_messages(self.processor.process_message)
+            await self.rabbit.consume_messages("tx", self.processor.process_message)
         except Exception as e:
             logger.error(f"Service error: {e}", exc_info=True)
             raise
@@ -181,15 +185,15 @@ class ConsumerService:
 
     async def startup(self) -> None:
         await self.redis.connect()
-        await self.rabbitmq.connect()
+        await self.rabbit.connect()
         await self.db.connect()
         await self.dag.connect()
 
     async def shutdown(self) -> None:
         self.running = False
         await self.redis.close()
-        if self.rabbitmq.connection and not self.rabbitmq.connection.is_closed:
-            await self.rabbitmq.close()
+        if self.rabbit.connection and not self.rabbit.connection.is_closed:
+            await self.rabbit.close()
             logger.info("RabbitMQ connection closed")
         await self.db.close()
         await self.dag.close()
