@@ -1,9 +1,9 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from src.models.tx import TxWrite
 from typing import List
-from pymongo import WriteConcern
+#from pymongo import WriteConcern
 import logging
-from pymongo.errors import DuplicateKeyError
+#from pymongo import AsyncMongoClient
 
 logging.basicConfig(
     level=logging.INFO,

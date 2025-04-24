@@ -4,7 +4,7 @@ services:
     container_name: rabbit
     hostname: rabbit
     ports:
-      - "127.0.0.1:5672:5672"
+      - "5672:5672"
       - "15672:15672"
 
   mongodb:
@@ -13,18 +13,6 @@ services:
     hostname: mongo
     ports:
       - "27017:27017"
-    volumes:
-      - mongodb_data:/data/db
-    #  - ./mongo.conf:/etc/mongo.conf
-    #command: mongod --config /etc/mongo.conf
-    #deploy:
-    #  resources:
-    #    limits:
-    #      cpus: '16.0'
-    #      memory: 64G
-    environment:
-      - MONGO_INITDB_DATABASE=feo
-    restart: unless-stopped
 
   keydb:
     image: eqalpha/keydb:latest
@@ -33,5 +21,31 @@ services:
     hostname: keydb
     ports:
       - "6379:6379"
-volumes:
-  mongodb_data:
+
+  memgraph:
+    image: memgraph/memgraph-mage:latest
+    container_name: memgraph
+    hostname: memgraph
+    ports:
+      - "7444:7444"  # Веб-интерфейс/REST API (опционально)
+      - "7687:7687"  # Bolt-протокол для клиентов
+    networks:
+      - network
+
+  memlab:
+    image: memgraph/lab:latest
+    container_name: memlab
+    hostname: memlab
+    ports:
+      - "3000:3000"  # Веб-интерфейс Memgraph Lab
+    environment:
+      - MEMGRAPH_HOST=memgraph
+      - MEMGRAPH_PORT=7687
+    depends_on:
+      - memgraph
+    networks:
+      - network
+
+networks:
+  network:
+    driver: bridge
