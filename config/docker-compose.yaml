@@ -13,6 +13,18 @@ services:
     hostname: mongo
     ports:
       - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    #  - ./mongo.conf:/etc/mongo.conf
+    #command: mongod --config /etc/mongo.conf
+    #deploy:
+    #  resources:
+    #    limits:
+    #      cpus: '16.0'
+    #      memory: 64G
+    environment:
+      - MONGO_INITDB_DATABASE=feo
+    restart: unless-stopped
 
   redis:
     image: redis:latest
@@ -54,3 +66,6 @@ secrets:
 volumes:
   influxdb2-data:
   influxdb2-config:
+
+volumes:
+  mongodb_data:

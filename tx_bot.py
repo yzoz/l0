@@ -13,12 +13,10 @@ from keys import pk, sk
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-client = httpx.AsyncClient()
 
 start = time.time()
 
@@ -37,7 +35,7 @@ async def arange(count):
         if i % 7 == 0: await asyncio.sleep(random.randint(0, 30))
         if i % 10 == 0: await asyncio.sleep(random.randint(0, 30))"""
 
-async def send(in_set):
+async def send(in_set, client):
     #await asyncio.sleep(random.randint(0, 30))
     """Отправка случайных транзакций в асинхронном режиме."""
     async for _ in arange(int(in_set)):
@@ -79,7 +77,7 @@ async def send(in_set):
 async def run_sender(in_set):
     """Запуск 10 параллельных корутин в одном процессе."""
     async with httpx.AsyncClient() as client:
-        await asyncio.gather(*[send(in_set) for _ in range(1)]) #250
+        await asyncio.gather(*[send(in_set, client) for _ in range(1)]) #250
 
 def process_target(in_set):
     """Функция-цель для каждого процесса."""

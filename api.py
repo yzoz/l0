@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from src.database.mongodb import MongoDB
 from src.database.queues import RabbitMQ
 from src.database.redis import Redis
+from src.database.graph import Memgraph
 from src.api.routers import transactions, root, graphql, pool
 
 @asynccontextmanager
@@ -13,14 +14,17 @@ async def lifespan(app: FastAPI):
     app.state.db = MongoDB()
     app.state.rabbit = RabbitMQ()
     app.state.redis = Redis()
+    app.state.graph = Memgraph()
     await app.state.rabbit.connect()
     await app.state.db.connect()
     await app.state.redis.connect()
+    await app.state.graph.connect()
     yield
     # Закрытие подключений
     #await app.state.db.client.close()
     await app.state.rabbit.close()
     await app.state.redis.close()
+    await app.state.graph.close()
 
 app = FastAPI(lifespan=lifespan)
 
