@@ -1,12 +1,11 @@
-from motor.motor_asyncio import AsyncIOMotorClient
 from src.models.tx import TxWrite
 from typing import List
 #from pymongo import WriteConcern
 import logging
-#from pymongo import AsyncMongoClient
+from pymongo import AsyncMongoClient
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -18,42 +17,82 @@ class MongoDB:
         self.tx = None
 
     async def connect(self):
-        self.client = AsyncIOMotorClient(
-            'localhost',
-            27017,
-            #maxPoolSize=10000,
-            #minPoolSize=1000,
-            #maxIdleTimeMS=30000,
-            #socketTimeoutMS=2000,
-            #connectTimeoutMS=2000
+        self.client = AsyncMongoClient(
+            'mongodb://localhost:27017',
+            # maxPoolSize=10000,
+            # minPoolSize=1000,
+            # maxIdleTimeMS=30000,
+            # socketTimeoutMS=2000,
+            # connectTimeoutMS=2000
         )
         self.db = self.client['feo']
         self.tx = self.db.tx
-        # Создаем индекс на поле hash
-        await self.tx.create_index("hash", unique=True)
-        await self.tx.create_index([("credit", 1), ("uniq", 1)])
 
-    async def insert_tx(self, tx: TxWrite):
-        #result = await self.tx.with_options(write_concern=WriteConcern(w=0)).insert_one(dict(tx))
-        result = await self.tx.insert_one(dict(tx))
-        return result.acknowledged
+    async def insert_tx(self, tx: TxWrite) -> bool:
+        """Вставляет одну транзакцию в коллекцию tx"""
+        try:
+            # Опция WriteConcern(w=0) для неподтверждённой записи (если нужно)
+            # result = await self.tx.with_options(write_concern=WriteConcern(w=0)).insert_one(dict(tx))
+            result = await self.tx.insert_one(dict(tx))
+            logger.debug(f"Inserted transaction with _id: {result.inserted_id}")
+            return result.acknowledged
+        except Exception as e:
+            #logger.error(f"Failed to insert transaction: {e}")
+            raise
     
     async def insert_many_tx(self, txs: List[TxWrite]) -> bool:
+        """Вставляет несколько транзакций в коллекцию tx"""
         if not txs:
+            logger.debug("No transactions to insert")
             return True
-        result = await self.tx.insert_many([dict(tx) for tx in txs])
-        return result.acknowledged
+        try:
+            result = await self.tx.insert_many([dict(tx) for tx in txs])
+            logger.debug(f"Inserted {len(result.inserted_ids)} transactions")
+            return result.acknowledged
+        except Exception as e:
+            logger.error(f"Failed to insert many transactions: {e}")
+            raise
 
     async def find_one(self, query: dict):
-        return await self.tx.find_one(query)
+        """Ищет одну транзакцию по запросу"""
+        try:
+            result = await self.tx.find_one(query)
+            logger.debug(f"Find one query: {query}, result: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to find one: {e}")
+            raise
 
     async def aggregate(self, pipeline: list):
-        result = await self.tx.aggregate(pipeline).to_list(1)
-        return result if result else None  # Упрощаем возврат результата
+        """Выполняет агрегацию по пайплайну"""
+        try:
+            cursor = self.tx.aggregate(pipeline)
+            results = []
+            async for doc in await cursor:
+                results.append(doc)
+                break  # Ограничиваем результат одним документом
+            logger.debug(f"Aggregate pipeline: {pipeline}, result: {results}")
+            return results if results else None
+        except Exception as e:
+            logger.error(f"Failed to aggregate: {e}")
+            raise
 
     async def find(self, query: dict, skip: int, limit: int):
-        return await self.tx.find(query).skip(skip).limit(limit).to_list(None)
+        """Ищет транзакции с пропуском и лимитом"""
+        try:
+            cursor = self.tx.find(query).skip(skip).limit(limit)
+            result = await cursor.to_list(length=None)
+            logger.debug(f"Find query: {query}, skip: {skip}, limit: {limit}, results: {len(result)}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to find: {e}")
+            raise
 
     async def close(self):
+        """Закрывает соединение с MongoDB"""
         if self.client:
-            self.client.close()
+            await self.client.close()
+            logger.info("MongoDB connection closed")
+            self.client = None
+            self.db = None
+            self.tx = None

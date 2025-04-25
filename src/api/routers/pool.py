@@ -18,8 +18,8 @@ async def pool(memgraph = Depends(get_memgraph)):
         num_txs = (await result.single())["N"]
 
         # Определение N и P в зависимости от размера графа
-        N = 2
-        P = 0
+        N = 2 # количество
+        P = 0 # с запасом для рандома
         if num_txs > 10:
             N = 3
             P = 4
