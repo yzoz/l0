@@ -3,9 +3,12 @@ from neo4j import AsyncGraphDatabase
 import redis.asyncio as redis
 from src.models.tx import TxStore
 from src.utils.data import hash_hex, ordered_sum
-from pymongo import MongoClient
+from pymongo import MongoClient, IndexModel, ASCENDING
 import time
 import logging
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from neo4j.exceptions import TransientError
+
 
 # Настройка логирования
 logging.basicConfig(
@@ -14,6 +17,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@retry(
+    stop=stop_after_attempt(5),  # Максимум 3 попытки
+    wait=wait_exponential(multiplier=1, min=0.1, max=2),  # Экспоненциальная задержка
+    retry=retry_if_exception_type(TransientError),  # Повтор для TransientError
+    reraise=True  # Проброс оригинальной ошибки при неудаче
+)
 async def main():
     # Инициализация подключений
     memgraph_driver = AsyncGraphDatabase.driver("bolt://localhost:7687")
@@ -25,6 +34,8 @@ async def main():
     # Очистка MongoDB
     txs.drop()
     logger.info("MongoDB collection 'tx' dropped")
+    txs.create_indexes([IndexModel([("hash", ASCENDING)], unique=True)])
+    txs.create_indexes([IndexModel([("credit", ASCENDING), ("uniq", 1)])])
 
     # Подключение к Redis
     await redis_client.flushall()
@@ -65,9 +76,8 @@ async def main():
         async with memgraph_driver.session() as session:
             # Очистка Memgraph
             await session.run("MATCH (n) DETACH DELETE n")
+            #await session.run("DROP GRAPH") memgraph --storage-mode=IN_MEMORY_ANALYTICAL
             logger.info("Memgraph cleared")
-            await session.run("CREATE CONSTRAINT ON (t:Transaction) ASSERT t.hash IS UNIQUE")
-            await session.run("CREATE INDEX ON :Transaction(hash)")
 
             # Добавление генезис-транзакций
             for tx in genesis_txs:
@@ -93,6 +103,9 @@ async def main():
                 # Установка баланса в Redis
                 await redis_client.set(f"balance:{tx.debit}", tx.amount)
                 logger.info(f"Created transaction {tx_hash} with balance {tx.amount} for {tx.debit}")
+            
+            await session.run("CREATE CONSTRAINT ON (t:Transaction) ASSERT t.hash IS UNIQUE")
+            await session.run("CREATE INDEX ON :Transaction(hash)")
 
             # Вывод всех узлов для отладки
             result = await session.run("MATCH (t:Transaction) RETURN t")

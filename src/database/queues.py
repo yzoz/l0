@@ -26,7 +26,6 @@ class RabbitMQ:
             Message(message.encode("utf-8"), delivery_mode=DeliveryMode.PERSISTENT),
             routing_key=queue_name
         )
-        logging.info(f"Published message to {queue_name}: {message}")
 
     async def consume_messages(self, queue_name, callback):
         """Потребление сообщений из очереди."""
