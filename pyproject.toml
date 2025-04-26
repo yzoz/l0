@@ -30,7 +30,7 @@ pytest-asyncio = "^0.26.0"
 fakeredis = "^2.23"
 
 [tool.poetry.scripts]
-fast = "fastapi run api.py --workers=3"
+fast = "fastapi run api.py --workers=3 --reload"
 txg = "python ./tx_generator.py"
 
 [build-system]
