@@ -190,6 +190,7 @@ class ConsumerService:
         self.running = False
 
     async def run(self, stop_event=None) -> None:
+        print(555)
         self.running = True
         try:
             await self.startup()
