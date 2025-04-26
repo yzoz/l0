@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 start = time.time()
 
 async def arange(count):
-    """Генератор для асинхронного перебора чисел."""
+    """Генератор для асинхронного перебора чисел.""" 
     for i in range(count):
         yield i
         await asyncio.sleep(0.1)

@@ -17,7 +17,7 @@ from neo4j.exceptions import TransientError
 logger = logging.getLogger(__name__)
 
 class ConsumerProcessor:
-    """Класс, отвечающий за обработку транзакций и управление графом"""
+    """Класс, отвечающий за обработку транзакций и управление графом   """ 
     def __init__(self, rabbit: RabbitMQ, db: MongoDB, redis: Redis, dag: Memgraph):
         self.db = db
         self.rabbit = rabbit
@@ -189,12 +189,12 @@ class ConsumerService:
         self.processor = ConsumerProcessor(self.rabbit, self.db, self.redis, self.dag)
         self.running = False
 
-    async def run(self) -> None:
+    async def run(self, stop_event=None) -> None:
         self.running = True
         try:
             await self.startup()
             logger.info(f"Consumer process {os.getpid()} started")
-            await self.rabbit.consume_messages("tx", self.processor.process_message)
+            await self.rabbit.consume_messages("tx", self.processor.process_message, stop_event=stop_event)
         except Exception as e:
             logger.error(f"Service error: {e}", exc_info=True)
             raise
