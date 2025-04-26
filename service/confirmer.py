@@ -1,15 +1,13 @@
 import logging
 from dataclasses import dataclass
-from src.database.mongodb import MongoDB
+from src.database.graph import Memgraph
 from src.database.redis import Redis
-from src.database.graph import Dag
+from src.database.queues import RabbitMQ
 import os
 import asyncio
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from neo4j.exceptions import TransientError
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
@@ -17,46 +15,75 @@ class Config:
     DAMPING: int = 0.5
 
 class ConfirmationProcessor:
-    def __init__(self, db: MongoDB, redis_client: Redis, dag: Dag):
-        self.db = db
-        self.redis = redis_client
+    def __init__(self, redis: Redis, dag: Memgraph):
         self.dag = dag
+        self.redis = redis
         self.config = Config()
 
+    @retry(
+        stop=stop_after_attempt(5),  # Максимум 3 попытки
+        wait=wait_exponential(multiplier=1, min=0.1, max=2),  # Экспоненциальная задержка
+        retry=retry_if_exception_type(TransientError),  # Повтор для TransientError
+        reraise=True  # Проброс оригинальной ошибки при неудаче
+    )
     async def check_pool(self):
-        await self.dag.load(self.redis)
+        """Пересчитывает веса всех транзакций в графе Memgraph"""
+        # Получение потомков и глубины путей
+        async with self.dag.driver.session() as session:
+            # Получение всех узлов
+            #result = await session.run("MATCH (t:Transaction) RETURN t.hash")
+            result = await session.run("MATCH (t:Transaction) RETURN t.hash ORDER BY rand() LIMIT 100")
+            nodes = [record["t.hash"] async for record in result]
+            # Пересчёт весов
+            for node in nodes:
+                try:
+                    async with self.redis.client.lock(f"dag:{node}"): 
+                        result = await session.run(
+                            """//cypher
+                            MATCH path=(t:Transaction {hash: $hash})-[:CONFIRMS*1..7]->(descendant)
+                            WITH length(path) as depth, descendant
+                            WITH depth, descendant.own_weight as own_weight,
+                                CASE depth
+                                    WHEN 1 THEN 0.5
+                                    WHEN 2 THEN 0.25
+                                    WHEN 3 THEN 0.125
+                                    WHEN 4 THEN 0.0625
+                                    WHEN 5 THEN 0.03125
+                                    WHEN 6 THEN 0.015625
+                                    WHEN 7 THEN 0.0078125
+                                    ELSE 0.0
+                                END as damping_factor
+                            RETURN sum(damping_factor * own_weight) as indirect_weight
+                            """,
+                            hash=node
+                        )
+                        record = await result.single()
+                        indirect_weight = record["indirect_weight"] if record else 0.0
+                        total_weight = 1.0 + indirect_weight  # own_weight + indirect_weight
 
-        def calculate_indirect_weight(node, depth=0, visited=None):
-            if visited is None:
-                visited = set()
-            if node in visited:
-                return 0.0
-            visited.add(node)
-            weight = 0.0
-            for child in self.dag.G.successors(node):
-                weight += self.config.DAMPING ** depth
-                weight += calculate_indirect_weight(child, depth + 1, visited.copy())
-            return weight
-        
-        for node in self.dag.G.nodes:
-            own_weight = 1.0
-            indirect_weight = calculate_indirect_weight(node)
-            self.dag.G.nodes[node]['weight'] = own_weight + indirect_weight
-
-        await self.dag.save(self.redis, self.dag.G)
-        print(len(self.dag.G.nodes))
+                        # Обновление веса узла
+                        await session.run(
+                            """
+                            MATCH (t:Transaction {hash: $hash})
+                            SET t.weight = $weight
+                            """,
+                            hash=node,
+                            weight=total_weight
+                        )
+                except Exception as e:
+                    logger.error(f"Service error: {e}")
 
     async def periodic_check_pool(self):
         while True:
             await self.check_pool()
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.025)
 
 class ConfirmationService:
     def __init__(self):
-        self.db = MongoDB()
+        self.dag = Memgraph()
         self.redis = Redis()
-        self.dag = Dag()
-        self.processor = ConfirmationProcessor(self.db, self.redis, self.dag)
+        self.rabbit = RabbitMQ()
+        self.processor = ConfirmationProcessor(self.redis, self.dag)
         self.running = False
 
     async def run(self) -> None:
@@ -73,11 +100,10 @@ class ConfirmationService:
 
     async def startup(self) -> None:
         await self.redis.connect()
-        await self.db.connect()
-        await self.dag.load(self.redis)
+        await self.dag.connect()
 
     async def shutdown(self) -> None:
         self.running = False
         await self.redis.close()
-        await self.db.close()
+        await self.dag.close()
         logger.info("All connections closed")

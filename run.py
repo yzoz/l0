@@ -5,7 +5,7 @@ from multiprocessing import Process, Event
 import signal
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
