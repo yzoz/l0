@@ -1,128 +1,163 @@
 import asyncio
 import logging
 import sys
-import signal
 from multiprocessing import Process, Event
-from watchfiles import awatch, Change
-import os
+import signal
+from pathlib import Path
+import threading
+import time
+from watchfiles import watch, DefaultFilter
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
+  level=logging.INFO,
+  format="%(asctime)s - %(process)d - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-def run_process(stop_event, s):
-    async def async_run():
-        if s == "cons":
-            from service.consumer import ConsumerService
-            service = ConsumerService()
-        elif s == "conf":
-            from service.confirmer import ConfirmationService
-            service = ConfirmationService()
-        elif s == "write":
-            from service.writer import WriterService
-            service = WriterService()
-        try:
-            await service.run()
-        except Exception as e:
-            logger.error(f"Process failed: {e}", exc_info=True)
-        finally:
-            await service.shutdown()
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+def run_process(stop_event, service_type):
+  async def async_run():
     try:
-        loop.run_until_complete(async_run())
-    except KeyboardInterrupt:
-        logger.info("Process interrupted")
-    finally:
-        loop.close()
+      if service_type == "cons":
+        from service.consumer import ConsumerService
 
-async def watch_files(processes, stop_events, service_type, num_processes):
-    """Следит за изменениями файлов и перезапускает процессы"""
-    watch_dirs = ['service', 'src']  # Директории для отслеживания
-    async for changes in awatch(*watch_dirs, rust_timeout=1000):
-        for change, path in changes:
-            if change == Change.modified:
-                logger.info(f"File {path} changed, restarting processes...")
-                # Останавливаем текущие процессы
-                for stop_event in stop_events:
-                    stop_event.set()
-                for process in processes:
-                    process.terminate()
-                    process.join()
-                
-                # Очищаем списки
-                processes.clear()
-                stop_events.clear()
-                
-                # Запускаем новые процессы
-                for _ in range(num_processes):
-                    stop_event = Event()
-                    process = Process(target=run_process, args=(stop_event, service_type))
-                    processes.append(process)
-                    stop_events.append(stop_event)
-                    process.start()
-                
-                logger.info(f"Restarted {num_processes} processes for service {service_type}")
-                break  # Прерываем цикл изменений, чтобы не обрабатывать остальные файлы в этом событии
+        service = ConsumerService()
+      elif service_type == "conf":
+        from service.confirmer import ConfirmationService
+
+        service = ConfirmationService()
+      elif service_type == "write":
+        from service.writer import WriterService
+
+        service = WriterService()
+      else:
+        logger.error(f"Unknown service type: {service_type}")
+        return
+      await service.run(stop_event)
+    except Exception as e:
+      logger.error(f"Process failed: {e}", exc_info=True)
+    finally:
+      await service.shutdown()
+
+  loop = asyncio.new_event_loop()
+  asyncio.set_event_loop(loop)
+  try:
+    loop.run_until_complete(async_run())
+  except KeyboardInterrupt:
+    logger.info("Process interrupted")
+  finally:
+    loop.close()
+
+class ProcessManager:
+  def __init__(self, service_type, num_processes, dev_mode=False):
+    self.service_type = service_type
+    self.num_processes = num_processes
+    self.dev_mode = dev_mode
+    self.processes = []
+    self.stop_events = []
+    self.running = False
+    self.GRACEFUL_TIMEOUT = 1
+    self.last_restart = 0
+    self.DEBOUNCE_INTERVAL = 1
+
+  def start_processes(self):
+    current_time = time.time()
+    if current_time - self.last_restart < self.DEBOUNCE_INTERVAL:
+      logger.debug(
+        f"Skipping restart, too soon after last restart ({current_time - self.last_restart:.2f}s)"
+      )
+      return
+    self.last_restart = current_time
+
+    self.stop_processes()
+    self.processes = []
+    self.stop_events = []
+    for _ in range(self.num_processes):
+      stop_event = Event()
+      process = Process(target=run_process, args=(stop_event, self.service_type))
+      self.processes.append(process)
+      self.stop_events.append(stop_event)
+      process.start()
+    logger.info(f"Started {self.num_processes} processes for {self.service_type}")
+    self.running = True
+
+  def stop_processes(self):
+    if not self.running:
+      return
+    logger.info(f"Stopping {self.num_processes} processes for {self.service_type} (graceful shutdown)")
+
+    for stop_event in self.stop_events:
+      stop_event.set()
+
+    start_time = time.time()
+    for process in self.processes:
+      if process.is_alive():
+        logger.info(f"Waiting for process {process.pid} to stop gracefully...")
+        process.join(timeout=self.GRACEFUL_TIMEOUT - (time.time() - start_time))
+        if process.is_alive():
+          logger.warning(f"Process {process.pid} did not stop gracefully, terminating...")
+          process.terminate()
+          process.join()
+
+    self.running = False
+    logger.info(f"All processes for {self.service_type} stopped")
 
 def main():
-    args = sys.argv[1:]
-    is_dev = 'dev' in args
-    if is_dev:
-        args.remove('dev')
-    
-    try:
-        service_type = args[0]
-        n = int(args[1]) if len(args) > 1 else 1
-    except IndexError:
-        logger.error("Service type required (cons, conf, write)")
-        sys.exit(1)
+  args = sys.argv[1:]
+  dev_mode = "dev" in args
+  service_type = args[0] if args else None
+  num_processes = int(args[1]) if len(args) > 1 else 1
 
-    NUM_PROCESSES = n
-    processes = []
-    stop_events = []
+  if not service_type:
+    logger.error("Service type not provided")
+    sys.exit(1)
 
-    # Запускаем процессы
-    for _ in range(NUM_PROCESSES):
-        stop_event = Event()
-        process = Process(target=run_process, args=(stop_event, service_type))
-        processes.append(process)
-        stop_events.append(stop_event)
-        process.start()
+  manager = ProcessManager(service_type, num_processes, dev_mode=dev_mode)
+  manager.start_processes()
 
-    logger.info(f"Started {NUM_PROCESSES} processes for service {service_type}")
+  if dev_mode:
+    restart_event = threading.Event()
 
-    def signal_handler(sig, frame):
-        logger.info("Received shutdown signal, stopping processes...")
-        for stop_event in stop_events:
-            stop_event.set()
-        for process in processes:
-            process.terminate()
-            process.join()
-        sys.exit(0)
+    def watch_files():
+      for changes in watch(".", recursive=True, watch_filter=DefaultFilter()):
+        for change in changes:
+          path = Path(change[1]).resolve().as_posix().lower()
+          if any(ignored in path for ignored in ["__pycache__", "env", "venv", ".git", ".idea", ".vscode"]):
+            continue
+          if path.endswith(".pyc") or Path(change[1]).name.startswith((".", "~")):
+            continue
+          if not path.endswith(".py"):
+            continue
+          logger.info(f"Detected file change: {change[1]}")
+          restart_event.set()
+          break
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    watching_thread = threading.Thread(target=watch_files, daemon=True)
+    watching_thread.start()
 
-    try:
-        if is_dev:
-            # Запускаем наблюдение за файлами в режиме разработки
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(watch_files(processes, stop_events, service_type, NUM_PROCESSES))
-        else:
-            # Ожидаем завершения процессов
-            for process in processes:
-                process.join()
-    except Exception as e:
-        logger.error(f"Main process error: {e}", exc_info=True)
-    finally:
-        for process in processes:
-            if process.is_alive():
-                process.terminate()
-                process.join()
+  def signal_handler(sig, frame):
+    logger.info("Received shutdown signal, stopping processes...")
+    manager.stop_processes()
+    sys.exit(0)
+
+  signal.signal(signal.SIGINT, signal_handler)
+  signal.signal(signal.SIGTERM, signal_handler)
+
+  try:
+    while True:
+      if dev_mode and restart_event.is_set():
+        logger.info("Restart signal received, restarting processes...")
+        restart_event.clear()
+        manager.start_processes()
+      time.sleep(0.5)
+      for process in manager.processes:
+        if not process.is_alive():
+          logger.error(f"Process {process.pid} unexpectedly stopped, restarting...")
+          manager.start_processes()
+          break
+  except Exception as e:
+    logger.error(f"Main process error: {e}")
+  finally:
+    manager.stop_processes()
 
 if __name__ == "__main__":
-    main()
+  main()
