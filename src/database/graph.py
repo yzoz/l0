@@ -1,17 +1,14 @@
-from src.database.redis import Redis
-import networkx as nx
-import pickle
+from neo4j import AsyncGraphDatabase
 
-class Dag:
-    def __init__(self):
-        self.G = nx.DiGraph()
-        
-    # Функция для загрузки графа из Redis
-    async def load(self, redis: Redis) -> nx.DiGraph:
-        graph_data = await redis.client.get("dag")
-        if graph_data:
-            self.G = pickle.loads(graph_data)
+class Memgraph:
+    def __init__(self, uri: str = "bolt://localhost:7687"):
+        self.uri = uri
+        self.driver = None
 
-    # Функция для сохранения графа в Redis
-    async def save(self, redis: Redis, G: nx.DiGraph):
-        await redis.client.set("dag", pickle.dumps(G))
+    async def connect(self) -> None:
+        self.driver = AsyncGraphDatabase.driver(self.uri)
+
+    async def close(self) -> None:
+        if self.driver:
+            await self.driver.close()
+            self.driver = None

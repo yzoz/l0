@@ -18,8 +18,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-client = httpx.AsyncClient()
-
 start = time.time()
 
 async def arange(count):
@@ -37,10 +35,10 @@ async def arange(count):
         if i % 7 == 0: await asyncio.sleep(random.randint(0, 30))
         if i % 10 == 0: await asyncio.sleep(random.randint(0, 30))"""
 
-async def send(in_set):
+async def send(t, client):
     #await asyncio.sleep(random.randint(0, 30))
     """Отправка случайных транзакций в асинхронном режиме."""
-    async for _ in arange(int(in_set)):
+    async for _ in arange(int(t)):
         n = len(sk) - 1
         i = random.randint(0, n)
         c = pk[i]  # credit (отправитель)
@@ -76,30 +74,44 @@ async def send(in_set):
         except Exception as e:
             logger.error(f"Error in send: {e}")
 
-async def run_sender(in_set):
-    """Запуск 10 параллельных корутин в одном процессе."""
+async def run_sender(t, c):
+    """Запуск C параллельных корутин в одном процессе."""
     async with httpx.AsyncClient() as client:
-        await asyncio.gather(*[send(in_set) for _ in range(1)]) #250
+        await asyncio.gather(*[send(t, client) for _ in range(c)]) #250
 
-def process_target(in_set):
+def process_target(t, c):
     """Функция-цель для каждого процесса."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(run_sender(in_set))
+        loop.run_until_complete(run_sender(t, c))
     except KeyboardInterrupt:
         logger.info(f"Process interrupted")
     finally:
         loop.close()
 
 def main():
+    args = sys.argv[1:]
+
+    try:
+        t = int(args[0])
+    except IndexError:
+        t = 100
+    try:
+        c = int(args[1])
+    except IndexError:
+        c = 1
+    try:
+        n = int(args[2])
+    except IndexError:
+        n = 1
+
     """Основная функция для запуска многопроцессного генератора транзакций."""
-    in_set = input("Enter the number of transactions to send per coroutine: ")
-    num_processes = 1  # Количество процессов (можно настроить)
+    num_processes = n  # Количество процессов (можно настроить)
 
     processes = []
     for _ in range(num_processes):
-        p = Process(target=process_target, args=(in_set,))
+        p = Process(target=process_target, args=(t, c))
         processes.append(p)
         p.start()
 
