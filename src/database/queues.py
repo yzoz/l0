@@ -1,6 +1,8 @@
 import logging
 from aio_pika import connect_robust, Message, DeliveryMode
 
+logger = logging.getLogger(__name__)
+
 class RabbitMQ:
     def __init__(self):
         self.connection = None
@@ -26,13 +28,16 @@ class RabbitMQ:
             Message(message.encode("utf-8"), delivery_mode=DeliveryMode.PERSISTENT),
             routing_key=queue_name
         )
-
-    async def consume_messages(self, queue_name, callback):
+    
+    async def consume_messages(self, queue_name: str, callback: callable, stop_event=None):
         """Потребление сообщений из очереди."""
         queue = await self.channel.declare_queue(queue_name, durable=True)
         async with queue.iterator() as queue_iter:
             async for message in queue_iter:
-                await callback(message)  # Обработка ошибок делегируется callback'у
+                if stop_event and stop_event.is_set():
+                    logger.info("Stop event detected, stopping message consumption")
+                    break
+                await callback(message)
 
     async def close(self):
         """Закрытие подключения."""

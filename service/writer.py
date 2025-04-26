@@ -97,8 +97,8 @@ class WriterProcessor:
         #print(tx_dict)
         return TxWrite(**tx_dict)
 
-    async def periodic_check_pool(self):
-        while True:
+    async def periodic_check_pool(self, stop_event=None):
+        while not (stop_event and stop_event.is_set()):
             await self.check_pool()
             await asyncio.sleep(0.025)
 
@@ -110,12 +110,12 @@ class WriterService:
         self.processor = WriterProcessor(self.db, self.redis, self.dag)
         self.running = False
 
-    async def run(self) -> None:
+    async def run(self, stop_event=None) -> None:
         self.running = True
         try:
             await self.startup()
             logger.info(f"Writer process {os.getpid()} started")
-            await self.processor.periodic_check_pool()
+            await self.processor.periodic_check_pool(stop_event)
         except Exception as e:
             logger.error(f"Service error: {e}", exc_info=True)
             raise
