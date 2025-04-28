@@ -66,6 +66,4 @@ secrets:
 volumes:
   influxdb2-data:
   influxdb2-config:
-
-volumes:
   mongodb_data:
