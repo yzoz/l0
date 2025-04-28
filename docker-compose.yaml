@@ -23,28 +23,23 @@ services:
       - "6379:6379"
 
   memgraph:
-    image: memgraph/memgraph-mage:latest
+    image: memgraph/memgraph:latest
     container_name: memgraph
     hostname: memgraph
     ports:
-      - "7444:7444"  # Веб-интерфейс/REST API (опционально)
-      - "7687:7687"  # Bolt-протокол для клиентов
-    networks:
-      - network
+      - "7687:7687"
 
   memlab:
     image: memgraph/lab:latest
     container_name: memlab
     hostname: memlab
     ports:
-      - "3000:3000"  # Веб-интерфейс Memgraph Lab
+      - "3000:3000"
     environment:
       - MEMGRAPH_HOST=memgraph
       - MEMGRAPH_PORT=7687
     depends_on:
       - memgraph
-    networks:
-      - network
 
   influxdb2:
     image: influxdb:2
@@ -81,7 +76,3 @@ secrets:
 volumes:
   influxdb2-data:
   influxdb2-config:
-
-networks:
-  network:
-    driver: bridge
