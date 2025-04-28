@@ -120,7 +120,7 @@ python tx_bot.py N-tx N-coroutines N-processes
 ## Сервисы
 - Memgraph Lab: `http://localhost:3000` (host: `memgraph`)
 - RabbitMQ: `http://localhost:15672` (логин/пароль: `guest`/`guest`)
-- InfluxDB: `http://localhost:15672` (логин/пароль: `admin`/`00000000`)
+- InfluxDB: `http://localhost:8086` (логин/пароль: `admin`/`00000000`)
 - MongoDB: [Compass](https://www.mongodb.com/products/tools/compass)
 - Redis: [Insight](https://redis.io/insight/)
 
