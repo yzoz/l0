@@ -98,7 +98,7 @@ class WriterProcessor:
         return TxWrite(**tx_dict)
 
     async def periodic_check_pool(self, stop_event=None):
-        while not (stop_event and stop_event.is_set()):
+        while True:
             await self.check_pool()
             await asyncio.sleep(0.025)
 

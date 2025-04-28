@@ -70,9 +70,6 @@ async def watch_files(processes, stop_events, service_type, num_processes):
 
 def main():
     args = sys.argv[1:]
-    is_dev = 'dev' in args
-    if is_dev:
-        args.remove('dev')
     
     try:
         service_type = args[0]
@@ -95,28 +92,11 @@ def main():
 
     logger.info(f"Started {NUM_PROCESSES} processes for service {service_type}")
 
-    def signal_handler(sig, frame):
-        logger.info("Received shutdown signal, stopping processes...")
-        for stop_event in stop_events:
-            stop_event.set()
-        for process in processes:
-            process.terminate()
-            process.join()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
     try:
-        if is_dev:
-            # Запускаем наблюдение за файлами в режиме разработки
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(watch_files(processes, stop_events, service_type, NUM_PROCESSES))
-        else:
-            # Ожидаем завершения процессов
-            for process in processes:
-                process.join()
+        # Запускаем наблюдение за файлами в режиме разработки
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(watch_files(processes, stop_events, service_type, NUM_PROCESSES))
     except Exception as e:
         logger.error(f"Main process error: {e}", exc_info=True)
     finally:

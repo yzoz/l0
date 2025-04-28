@@ -143,3 +143,12 @@ def main():
 
 if __name__ == "__main__":
   main()
+
+"""
+watchmedo shell-command \
+    --patterns='*.py' \
+    --recursive \
+    --verbose \
+    --command='python run.py cons 5' \
+    .
+"""
