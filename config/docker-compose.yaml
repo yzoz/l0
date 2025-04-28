@@ -32,6 +32,8 @@ services:
     hostname: redis
     ports:
       - "6379:6379"
+    networks:
+      - network
   influxdb2:
     image: influxdb:2
     container_name: influx
@@ -67,3 +69,8 @@ volumes:
   influxdb2-data:
   influxdb2-config:
   mongodb_data:
+
+networks:
+  network:
+    driver: bridge
+    
