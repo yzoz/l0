@@ -59,14 +59,6 @@ class ProcessManager:
     self.DEBOUNCE_INTERVAL = 1
 
   def start_processes(self):
-    current_time = time.time()
-    if current_time - self.last_restart < self.DEBOUNCE_INTERVAL:
-      logger.debug(
-        f"Skipping restart, too soon after last restart ({current_time - self.last_restart:.2f}s)"
-      )
-      return
-    self.last_restart = current_time
-
     self.stop_processes()
     self.processes = []
     self.stop_events = []
@@ -82,20 +74,13 @@ class ProcessManager:
   def stop_processes(self):
     if not self.running:
       return
-    logger.info(f"Stopping {self.num_processes} processes for {self.service_type} (graceful shutdown)")
 
     for stop_event in self.stop_events:
       stop_event.set()
 
-    start_time = time.time()
     for process in self.processes:
-      if process.is_alive():
-        logger.info(f"Waiting for process {process.pid} to stop gracefully...")
-        process.join(timeout=self.GRACEFUL_TIMEOUT - (time.time() - start_time))
-        if process.is_alive():
-          logger.warning(f"Process {process.pid} did not stop gracefully, terminating...")
-          process.terminate()
-          process.join()
+        process.terminate()
+        process.join()
 
     self.running = False
     logger.info(f"All processes for {self.service_type} stopped")
@@ -118,7 +103,7 @@ def main():
     for changes in watch(".", recursive=True, watch_filter=DefaultFilter()):
       for change in changes:
         path = Path(change[1]).resolve().as_posix().lower()
-        if any(ignored in path for ignored in ["__pycache__", "env", "venv", ".git", ".idea", ".vscode"]):
+        if any(ignored in path for ignored in ["__pycache__", "env", ".git", ".idea", ".vscode"]):
           continue
         if path.endswith(".pyc") or Path(change[1]).name.startswith((".", "~")):
           continue
@@ -128,8 +113,8 @@ def main():
         restart_event.set()
         break
 
-    watching_thread = threading.Thread(target=watch_files, daemon=True)
-    watching_thread.start()
+  watching_thread = threading.Thread(target=watch_files, daemon=True)
+  watching_thread.start()
 
   def signal_handler(sig, frame):
     logger.info("Received shutdown signal, stopping processes...")
