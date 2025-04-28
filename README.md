@@ -79,7 +79,7 @@ l0-python/
 ├── keys.py                 # Тестовые ключи
 ├── tx_bot.py               # Генерация тестовых транзакций
 ├── run.py                  # Продакшн раннер
-├── run.d.py                # Раннер для разработки
+├── run.d.py                # Раннер для разработки (не работает:)
 └── README.md               # Документация
 ```
 
@@ -110,7 +110,6 @@ fastapi run api.py --workers=3 --reload
 В отдельных терминалах запустите сервисы:
 ```bash
 python run.py SERVICE N-processes
-python run.d.py SERVICE N-processes
 ```
 
 ## Тестирование

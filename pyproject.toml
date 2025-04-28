@@ -27,6 +27,7 @@ pytest-asyncio = "^0.26.0"
 fakeredis = "^2.23"
 networkx = "^3.4.2"
 watchfiles = "^1.0.5"
+watchdog = {extras = ["watchmedo"], version = "^6.0.0"}
 
 [tool.poetry.scripts]
 fast = "fastapi run api.py --workers=3 --reload"
