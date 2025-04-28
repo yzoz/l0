@@ -3,6 +3,7 @@ import logging
 import sys
 from multiprocessing import Process, Event
 import signal
+import time
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -22,7 +23,7 @@ def run_process(stop_event, s):
             from service.writer import WriterService
             service = WriterService()
         try:
-            await service.run()
+            await service.run(stop_event)
         except Exception as e:
             logger.error(f"Process failed: {e}", exc_info=True)
         finally:
@@ -62,9 +63,16 @@ def main():
         logger.info("Received shutdown signal, stopping processes...")
         for stop_event in stop_events:
             stop_event.set()
+
+        start_time = time.time()
         for process in processes:
-            process.terminate()
-            process.join()
+            if process.is_alive():
+                logger.info(f"Waiting for process {process.pid} to stop gracefully...")
+                process.join(timeout=10 - (time.time() - start_time))
+                if process.is_alive():
+                    logger.warning(f"Process {process.pid} did not stop gracefully, terminating...")
+                    process.terminate()
+                    process.join()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
