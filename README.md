@@ -118,11 +118,11 @@ python run.py SERVICE N-processes
 python tx_bot.py N-tx N-coroutines N-processes
 ```
 ## Сервисы
-Memgraph Lab: `http://localhost:3000` (host: `memgraph`)
-RabbitMQ: `http://localhost:15672` (логин/пароль: `guest`/`guest`)
-InfluxDB: `http://localhost:15672` (логин/пароль: `admin`/`00000000`)
-MongoDB: [Compass](https://www.mongodb.com/try/download/compass)
-Redis: [Insight](https://redis.io/insight/)
+- Memgraph Lab: `http://localhost:3000` (host: `memgraph`)
+- RabbitMQ: `http://localhost:15672` (логин/пароль: `guest`/`guest`)
+- InfluxDB: `http://localhost:15672` (логин/пароль: `admin`/`00000000`)
+- MongoDB: [Compass](https://www.mongodb.com/try/download/compass)
+- Redis: [Insight](https://redis.io/insight/)
 
 ## Пример GraphQL запроса
 Запросите транзакции через GraphQL:
