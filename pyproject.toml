@@ -27,6 +27,8 @@ fakeredis = "^2.23"
 networkx = "^3.4.2"
 watchfiles = "^1.0.5"
 watchdog = {extras = ["watchmedo"], version = "^6.0.0"}
+ruff = "^0.17.0"
+pytest-cov = "^7.1.0"
 
 [tool.poetry]
 package-mode = false
@@ -34,14 +36,42 @@ package-mode = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-m 'not integration'"
+pythonpath = ["."]
+addopts = "-m 'not integration' --cov=src --cov=service --cov-report=term-missing"
 markers = [
     "integration: requires external services such as MongoDB and Redis",
 ]
 
+[tool.coverage.run]
+source = ["src", "service"]
+omit = ["*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
 [tool.poetry.scripts]
-fast = "fastapi run api.py --workers=3 --reload"
-txg = "python ./tx_generator.py"
+txg = "tx_bot:main"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = ["env", ".venv", "utils"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = [
+    "B008",  # FastAPI: Depends(...) в значениях по умолчанию — это норма
+]
+
+[tool.ruff.lint.per-file-ignores]
+"keys.py" = ["E501"]  # длинные строки с ключами
+
+[tool.ruff.format]
+quote-style = "double"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
