@@ -4,21 +4,32 @@
 
 This repo has a semantic index (`open-codebase-index`).
 
-**ALWAYS prefer index tools over raw file reads:**
+## Codebase tools (MANDATORY)
 
-1. Unknown area / “how does X work?”  
-   → `codebase_context` (compact, tokenBudget ≈ 600) **or** `codebase_peek`
+Available tools from open-codebase-index:
 
-2. Need actual code snippets  
-   → `codebase_search` (not full-file Read)
+Use such requests:
 
-3. Know the symbol name  
-   → `implementation_lookup` / `call_graph`
+```js
+return await tools.index_status({});
+return await tools.codebase_context({ query: "query" });
+return await tools.codebase_search({ query: "query" });
+return await tools.codebase_peek({ query: "query" });
+```
 
-4. Exact string / regex  
-   → `grep` / `rg`
+- codebase_context (Orient in unfamiliar repository code with a compact evidence pack)
+- codebase_search (Retrieve full matching code)
+- architecture_context (Obtain a brief repository map before targeted extraction or editing)
+- codebase_peek (Find likely files and symbols without source bodies)
+- implementation_lookup (Find an authoritative definition)
+- find_similar (Find analogous implementations or duplicates)
+- call_graph (Find direct callers or callees)
 
-5. **Only then** Read a specific file — and only the needed range if possible.
+Call them by these exact names.
+Do not invent tools.codebase_* paths.
+Do not use Glob/Grep/Read for discovery when these tools exist.
+
+**Only then** Read a specific file — and only the needed range if possible.
 
 ### Hard rules
 - Do **not** open large files “just to look around”.
