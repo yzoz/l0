@@ -1,9 +1,11 @@
-import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
-from pymongo.results import InsertOneResult, InsertManyResult
+
+import pytest
+from pymongo.results import InsertManyResult, InsertOneResult
+
 from src.database.mongodb import MongoDB
 from src.models.tx import TxWrite
+
 
 # Фикстура для TxWrite
 @pytest.fixture
@@ -17,8 +19,9 @@ def tx_write():
         msg="test",
         sign="signature",
         hash="tx_hash_123",
-        time=1234567890
+        time=1234567890,
     )
+
 
 # Фикстура для MongoDB
 @pytest.fixture
@@ -28,6 +31,7 @@ def mongodb():
     db.db = MagicMock()
     db.tx = MagicMock()
     return db
+
 
 @pytest.mark.asyncio
 async def test_connect(mongodb, monkeypatch):
@@ -39,6 +43,7 @@ async def test_connect(mongodb, monkeypatch):
     assert mongodb.db is not None
     assert mongodb.tx is not None
 
+
 @pytest.mark.asyncio
 async def test_insert_tx_success(mongodb, tx_write):
     """Тест успешной вставки одной транзакции"""
@@ -48,12 +53,14 @@ async def test_insert_tx_success(mongodb, tx_write):
     assert result is True
     mongodb.tx.insert_one.assert_called_once_with(dict(tx_write))
 
+
 @pytest.mark.asyncio
 async def test_insert_tx_failure(mongodb, tx_write):
     """Тест ошибки при вставке одной транзакции"""
     mongodb.tx.insert_one = AsyncMock(side_effect=Exception("MongoDB error"))
     with pytest.raises(Exception, match="MongoDB error"):
         await mongodb.insert_tx(tx_write)
+
 
 @pytest.mark.asyncio
 async def test_insert_many_tx_success(mongodb, tx_write):
@@ -64,12 +71,14 @@ async def test_insert_many_tx_success(mongodb, tx_write):
     assert result is True
     mongodb.tx.insert_many.assert_called_once_with([dict(tx_write), dict(tx_write)])
 
+
 @pytest.mark.asyncio
 async def test_insert_many_tx_empty(mongodb):
     """Тест вставки пустого списка транзакций"""
     result = await mongodb.insert_many_tx([])
     assert result is True
     mongodb.tx.insert_many.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_find_one_success(mongodb):
@@ -81,30 +90,37 @@ async def test_find_one_success(mongodb):
     assert result == mock_result
     mongodb.tx.find_one.assert_called_once_with(query)
 
+
 @pytest.mark.asyncio
 async def test_aggregate_success(mongodb):
     """Тест успешной агрегации"""
     pipeline = [{"$match": {"uniq": "tx123"}}]
     mock_result = [{"uniq": "tx123", "amount": 100}]
+
     async def cursor():
         for item in mock_result:
             yield item
+
     mongodb.tx.aggregate = AsyncMock(return_value=cursor())
     result = await mongodb.aggregate(pipeline)
     assert result == mock_result
     mongodb.tx.aggregate.assert_called_once_with(pipeline)
 
+
 @pytest.mark.asyncio
 async def test_aggregate_empty(mongodb):
     """Тест пустого результата агрегации"""
     pipeline = [{"$match": {"uniq": "tx123"}}]
+
     async def cursor():
         if False:
             yield None
+
     mongodb.tx.aggregate = AsyncMock(return_value=cursor())
     result = await mongodb.aggregate(pipeline)
     assert result is None
     mongodb.tx.aggregate.assert_called_once_with(pipeline)
+
 
 @pytest.mark.asyncio
 async def test_find_success(mongodb):
@@ -120,6 +136,7 @@ async def test_find_success(mongodb):
     result = await mongodb.find(query, skip, limit)
     assert result == mock_result
     mongodb.tx.find.assert_called_once_with(query)
+
 
 @pytest.mark.asyncio
 async def test_close(mongodb):
