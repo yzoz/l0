@@ -1,5 +1,6 @@
 from neo4j import AsyncGraphDatabase
 
+
 class Memgraph:
     def __init__(self, uri: str = "bolt://localhost:7687"):
         self.uri = uri
