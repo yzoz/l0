@@ -1,35 +1,36 @@
-from fastapi import APIRouter, Depends, Request, HTTPException
-from src.models.tx import TxRead
-from src.utils.crypto import verify_message
-from src.utils.data import ordered_sum
+import asyncio
 import json
 import logging
-import asyncio
 from hashlib import sha512
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from nacl.exceptions import BadSignatureError
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from src.config import RABBITMQ_TIMEOUT
+from src.models.tx import TxRead
+from src.utils.crypto import verify_message
+from src.utils.data import ordered_sum
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-RABBITMQ_TIMEOUT = 5
 
 async def get_rabbit(request: Request):
     return request.app.state.rabbit
 
+
 @router.post("/send/")
-async def send(
-    tx: TxRead,
-    rabbit = Depends(get_rabbit)
-):
-    print(ordered_sum(dict(tx.content)))
+async def send(tx: TxRead, rabbit=Depends(get_rabbit)):
+    logger.debug("Ordered sum: %s", ordered_sum(dict(tx.content)))
     try:
-        logger.info(f"Processing transaction: uniq={tx.content.uniq}, credit={tx.content.credit}, debit={tx.content.debit}")
+        logger.info(
+            f"Processing transaction: uniq={tx.content.uniq}, credit={tx.content.credit}, debit={tx.content.debit}"
+        )
 
         # Проверка подписи
-        message_to_verify = sha512(ordered_sum(dict(tx.content)).encode('utf-8')).digest()
+        message_to_verify = sha512(ordered_sum(dict(tx.content)).encode("utf-8")).digest()
         try:
             verified_message = verify_message(tx.content.credit, tx.sign, message_to_verify)
         except (BadSignatureError, ValueError, TypeError):
@@ -37,7 +38,7 @@ async def send(
         if verified_message != message_to_verify:
             logger.warning(f"Signature verification failed: credit={tx.content.credit}")
             raise HTTPException(status_code=400, detail=[{"success": 0, "msg": "Bad sign!"}])
-        
+
         message = json.dumps(jsonable_encoder(tx))
         logger.info(f"Publishing to RabbitMQ: {message}")
 
@@ -47,12 +48,12 @@ async def send(
             logger.info(f"Transaction successfully published: uniq={tx.content.uniq}")
         except asyncio.TimeoutError:
             logger.error(f"RabbitMQ timeout after {RABBITMQ_TIMEOUT}s: uniq={tx.content.uniq}")
-            raise HTTPException(status_code=503, detail=[{"success": 0, "msg": "RabbitMQ timeout"}])
+            raise HTTPException(status_code=503, detail=[{"success": 0, "msg": "RabbitMQ timeout"}]) from None
 
         return {"detail": [{"success": 1, "msg": "ok"}]}
 
-    except HTTPException as e:
-        raise e
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception:
         logger.error("Unexpected error in send", exc_info=True)
-        raise HTTPException(status_code=500, detail=[{"success": 0, "msg": "Internal server error"}])
+        raise HTTPException(status_code=500, detail=[{"success": 0, "msg": "Internal server error"}]) from None

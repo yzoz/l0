@@ -1,23 +1,27 @@
 import asyncio
 import json
-import time
 import logging
+import os
+import time
+
 from aio_pika import IncomingMessage
-from src.database.queues import RabbitMQ
-from src.database.mongodb import MongoDB
-from src.database.redis import Redis
+from neo4j.exceptions import Neo4jError, TransientError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
 from src.database.graph import Memgraph
+from src.database.mongodb import MongoDB
+from src.database.queues import RabbitMQ
+from src.database.redis import Redis
 from src.models.tx import TxStore
 from src.utils.data import hash_hex, ordered_sum
 from src.utils.profile import get_balance
-import os
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from neo4j.exceptions import TransientError
 
 logger = logging.getLogger(__name__)
 
+
 class ConsumerProcessor:
-    """Класс, отвечающий за обработку транзакций и управление графом   """ 
+    """Класс, отвечающий за обработку транзакций и управление графом"""
+
     def __init__(self, rabbit: RabbitMQ, db: MongoDB, redis: Redis, dag: Memgraph):
         self.db = db
         self.rabbit = rabbit
@@ -83,23 +87,9 @@ class ConsumerProcessor:
     async def verify_balance(self, tx: TxStore) -> bool:
         """Проверяет, достаточно ли средств для выполнения транзакции"""
         balance = await get_balance(tx.credit, self.db, self.redis)
-        """if tx.credit == "8Aq9TxgVtGCLcpyTmJpqj7D6a9WriTVHAmjEvdDxaHfJ":
-            print(tx.credit, balance, tx.amount, balance - tx.amount)"""
         return balance >= tx.amount
 
     async def verify_parents(self, tx_hash: str, tx: TxStore) -> bool:
-        """Проверяет наличие всех родительских транзакций"""
-        '''async with self.dag.driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (t:Transaction)
-                WHERE t.hash IN $parent_hashes
-                RETURN count(t) as found
-                """,
-                parent_hashes=tx.parents
-            )
-            record = await result.single()
-            return record["found"] == len(tx.parents)'''
         """Проверяет наличие всех родительских транзакций по порядку и их подтверждение в Redis"""
         for parent_hash in tx.parents:
             # Проверка существования родителя в Memgraph
@@ -109,7 +99,7 @@ class ConsumerProcessor:
                     MATCH (t:Transaction {hash: $parent_hash})
                     RETURN t
                     """,
-                    parent_hash=parent_hash
+                    parent_hash=parent_hash,
                 )
                 record = await result.single()
                 if not record:
@@ -120,11 +110,12 @@ class ConsumerProcessor:
                         logger.warning(f"Parent transaction {parent_hash} not found for {tx_hash}")
                         return False
         return True
+
     @retry(
         stop=stop_after_attempt(5),  # Максимум 3 попытки
         wait=wait_exponential(multiplier=1, min=0.1, max=2),  # Экспоненциальная задержка
         retry=retry_if_exception_type(TransientError),  # Повтор для TransientError
-        reraise=True  # Проброс оригинальной ошибки при неудаче
+        reraise=True,  # Проброс оригинальной ошибки при неудаче
     )
     async def add_to_graph(self, tx_hash: str, tx: TxStore) -> bool:
         """Добавляет транзакцию в граф Memgraph"""
@@ -144,7 +135,7 @@ class ConsumerProcessor:
                         })
                         """,
                         hash=tx_hash,
-                        data=tx_data
+                        data=tx_data,
                     )
                     # Создание рёбер от родителей к нашему узлу
                     for parent in tx.parents:
@@ -157,7 +148,7 @@ class ConsumerProcessor:
                                 CREATE (parent)-[:CONFIRMS]->(child)
                                 """,
                                 parent_hash=parent,
-                                child_hash=tx_hash
+                                child_hash=tx_hash,
                             )
                     # Проверка на цикл, пути от узла к самому себе
                     result = await session.run(
@@ -166,21 +157,19 @@ class ConsumerProcessor:
                         WHERE t.hash = $hash
                         RETURN count(path) as cycle_count
                         """,
-                        hash=tx_hash
+                        hash=tx_hash,
                     )
                     cycle_count = (await result.single())["cycle_count"]
                     if cycle_count > 0:
                         logger.warning(f"Cycle detected for {tx_hash}")
-                        await session.run(
-                            "MATCH (t:Transaction {hash: $hash}) DETACH DELETE t",
-                            hash=tx_hash
-                        )
+                        await session.run("MATCH (t:Transaction {hash: $hash}) DETACH DELETE t", hash=tx_hash)
                         return False
-                    
+
                     return True
-                except Exception as e:
+                except Neo4jError as e:
                     logger.error(f"Service error: {e}")
-                    return False 
+                    return False
+
 
 class ConsumerService:
     def __init__(self):
