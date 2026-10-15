@@ -5,7 +5,7 @@ from src.database.mongodb import MongoDB
 from src.database.redis import Redis
 
 
-async def get_balance_sync(addr: str, db: MongoDB):
+async def balance_from_ledger(addr: str, db: MongoDB):
     """Считает баланс адреса напрямую по коллекции подтверждённых транзакций.
 
     Конвенция credit/debit: ``credit`` — плательщик (отправитель средств),
@@ -32,21 +32,17 @@ async def get_balance_sync(addr: str, db: MongoDB):
     return income - outcome
 
 
-async def get_balance(addr: str, db: MongoDB, redis: Redis, sync=False) -> int:
-    """Возвращает баланс адреса, по возможности из кэша Redis.
+async def get_balance(addr: str, db: MongoDB, redis: Redis) -> int:
+    """Возвращает баланс адреса из кэша Redis; при промахе — из реестра MongoDB.
 
-    ``credit`` — плательщик, ``debit`` — получатель (см. ``get_balance_sync``).
+    ``credit`` — плательщик, ``debit`` — получатель (см. ``balance_from_ledger``).
     """
-    if sync:
-        return await asyncio.wait_for(get_balance_sync(addr, db), timeout=BALANCE_TIMEOUT) or 0
-    else:
-        """Получает баланс из Redis или MongoDB"""
-        balance_key = f"balance:{addr}"
-        try:
-            balance = await asyncio.wait_for(redis.client.get(balance_key), timeout=BALANCE_TIMEOUT)
-            if balance is None:
-                balance = await asyncio.wait_for(get_balance_sync(addr, db), timeout=BALANCE_TIMEOUT) or 0
-                await redis.client.set(balance_key, balance)
-            return int(balance)
-        except asyncio.TimeoutError:
-            return 0
+    balance_key = f"balance:{addr}"
+    try:
+        balance = await asyncio.wait_for(redis.client.get(balance_key), timeout=BALANCE_TIMEOUT)
+        if balance is None:
+            balance = await asyncio.wait_for(balance_from_ledger(addr, db), timeout=BALANCE_TIMEOUT) or 0
+            await redis.client.set(balance_key, balance)
+        return int(balance)
+    except asyncio.TimeoutError:
+        return 0

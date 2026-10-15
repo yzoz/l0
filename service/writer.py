@@ -16,6 +16,15 @@ from src.utils.profile import get_balance
 logger = logging.getLogger(__name__)
 
 
+def _is_mint(tx: TxWrite) -> bool:
+    """Минт (genesis) — транзакция без плательщика: ``credit`` пуст.
+
+    Минт создаёт деньги (их pre-load в Redis делает genesis.py), а не переводит
+    их, поэтому в Redis он не трогает ``balance:*`` — иначе начисление удвоится.
+    """
+    return not tx.credit.strip()
+
+
 class WriterProcessor:
     def __init__(self, db: MongoDB, redis: Redis, dag: Memgraph):
         self.db = db
@@ -47,6 +56,10 @@ class WriterProcessor:
 
         MongoDB считается источником истины: запись в неё выполняется первой, а
         при сбое последующих шагов вставленный документ удаляется (компенсация).
+
+        Минт (``credit`` пуст) попадает в реестр, но не двигает ``balance:*`` в
+        Redis: его баланс уже задан pre-load-ом genesis, повторное начисление
+        удвоило бы сумму.
         """
         tx = self.create_tx(tx_hash, data)
         confirmed_key = f"confirmed:{tx.hash}"
@@ -68,11 +81,13 @@ class WriterProcessor:
             return
         logger.info("Confirmed TX saved: %s", tx.hash)
 
-        # 2. Redis — обновление балансов и маркера подтверждения.
+        # 2. Redis — маркер подтверждения; для перевода дополнительно обновляются
+        # балансы. Минт balance:* не трогает — его pre-load уже установлен genesis.
         try:
             async with self.redis.client.pipeline() as pipe:
-                await pipe.incrby(f"balance:{tx.debit}", tx.amount)
-                await pipe.decrby(f"balance:{tx.credit}", tx.amount)
+                if not _is_mint(tx):
+                    await pipe.incrby(f"balance:{tx.debit}", tx.amount)
+                    await pipe.decrby(f"balance:{tx.credit}", tx.amount)
                 await pipe.set(confirmed_key, 1, ex=CONFIRMED_TTL)
                 await pipe.execute()
         except Exception as e:
@@ -121,19 +136,22 @@ class WriterProcessor:
                         continue
 
                     tx = self.create_tx(t["hash"], t["data"])
-                    balance = await get_balance(tx.credit, self.db, self.redis)
-                    if balance < tx.amount:
-                        # Недостаточно средств — транзакция не может быть подтверждена.
-                        metrics.inc("insufficient")
-                        metrics.event(
-                            "warn",
-                            "funds",
-                            f"{tx.hash[:8]} недостаточно средств",
-                            ref=tx.hash,
-                            key=f"funds:{tx.hash}",
-                        )
-                        await self._delete_node(session, tx.hash)
-                        continue
+                    # У минта нет плательщика: проверка баланса его только ложно
+                    # отсекает (пустой credit даёт баланс 0), поэтому пропускаем.
+                    if not _is_mint(tx):
+                        balance = await get_balance(tx.credit, self.db, self.redis)
+                        if balance < tx.amount:
+                            # Недостаточно средств — транзакция не может быть подтверждена.
+                            metrics.inc("insufficient")
+                            metrics.event(
+                                "warn",
+                                "funds",
+                                f"{tx.hash[:8]} недостаточно средств",
+                                ref=tx.hash,
+                                key=f"funds:{tx.hash}",
+                            )
+                            await self._delete_node(session, tx.hash)
+                            continue
 
                     await self._confirm(session, t["hash"], t["data"])
 

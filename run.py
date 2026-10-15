@@ -45,37 +45,59 @@ async def run_service(service_type):
 
 
 async def watch_and_run():
-    parser = argparse.ArgumentParser(description="Запуск сервиса с перезапуском по изменениям файлов.")
+    parser = argparse.ArgumentParser(description="Запуск сервиса L0.")
     parser.add_argument("service_type", choices=SERVICE_TYPES, help="тип сервиса")
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="режим разработки: перезапуск при изменениях .py (по умолчанию выключен — прод)",
+    )
     args = parser.parse_args(sys.argv[1:])
     service_type = args.service_type
 
-    logger.info("Starting service '%s' with file watching on %s", service_type, WATCH_DIRS)
     metrics.set_role(service_type)
     dumper = start_dumper(service_type)
+
+    if not args.watch:
+        # Прод-режим (дефолт): сервис крутится сам, без file-watching.
+        logger.info("Starting service '%s' (prod mode, no file watching)", service_type)
+        try:
+            await run_service(service_type)
+        finally:
+            dumper.cancel()
+        return
+
+    # Режим разработки: следим за .py и перезапускаем сервис. Best-effort —
+    # если вотчер не поднялся (например, исчерпан inotify), работаем без reload.
+    logger.info("Starting service '%s' with file watching on %s", service_type, WATCH_DIRS)
     service_task = asyncio.create_task(run_service(service_type))
 
     try:
-        async for changes in awatch(*WATCH_DIRS):
-            py_changes = [(change, path) for change, path in changes if path.endswith(".py")]
-            if not py_changes:
-                continue
+        try:
+            async for changes in awatch(*WATCH_DIRS):
+                py_changes = [(change, path) for change, path in changes if path.endswith(".py")]
+                if not py_changes:
+                    continue
 
-            for change, path in py_changes:
-                logger.info("Detected %s in %s", Change(change).name, path)
-            logger.info("Restarting service...")
+                for change, path in py_changes:
+                    logger.info("Detected %s in %s", Change(change).name, path)
+                logger.info("Restarting service...")
 
-            service_task.cancel()
-            try:
-                await service_task
-            except asyncio.CancelledError:
-                logger.info("Previous service instance cancelled")
-            # Локальные счётчики сбрасываются при перезапуске сервиса.
-            metrics.reset()
-            service_task = asyncio.create_task(run_service(service_type))
+                service_task.cancel()
+                try:
+                    await service_task
+                except asyncio.CancelledError:
+                    logger.info("Previous service instance cancelled")
+                # Локальные счётчики сбрасываются при перезапуске сервиса.
+                metrics.reset()
+                service_task = asyncio.create_task(run_service(service_type))
+        except Exception as exc:
+            logger.warning("File watching unavailable (%s); continuing without reload", exc)
+            await service_task
     finally:
         dumper.cancel()
-        service_task.cancel()
+        if not service_task.done():
+            service_task.cancel()
         await asyncio.gather(service_task, return_exceptions=True)
 
 

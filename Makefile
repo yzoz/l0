@@ -1,4 +1,4 @@
-.PHONY: install up down logs genesis api test lint format cons conf write sys details
+.PHONY: install up down logs genesis api test test-all e2e lint format cons conf write sys details
 
 install: ## Установить зависимости
 	poetry install
@@ -24,6 +24,9 @@ test: ## Прогнать unit-тесты
 test-all: ## Прогнать все тесты, включая интеграционные
 	poetry run pytest -m ""
 
+e2e: ## Сквозной прогон: genesis → сервисы → tx → осаждение → верификатор
+	bash scripts/e2e.sh
+
 lint: ## Проверка линтером
 	poetry run ruff check .
 
@@ -31,13 +34,13 @@ format: ## Автоформатирование
 	poetry run ruff format .
 	poetry run ruff check . --fix
 
-cons: ## Запустить consumer
+cons: ## Запустить consumer (прод, без reload; hot-reload: ./dev cons)
 	poetry run python run.py cons
 
-conf: ## Запустить confirmer
+conf: ## Запустить confirmer (прод, без reload; hot-reload: ./dev conf)
 	poetry run python run.py conf
 
-write: ## Запустить writer
+write: ## Запустить writer (прод, без reload; hot-reload: ./dev write)
 	poetry run python run.py write
 
 tx: ## Запустить генерацию транзакций

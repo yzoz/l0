@@ -3,7 +3,7 @@ import pytest
 from src.config import DEV_ADDR
 from src.database.mongodb import MongoDB
 from src.database.redis import Redis
-from src.utils.profile import get_balance, get_balance_sync
+from src.utils.profile import balance_from_ledger, get_balance
 
 
 @pytest.mark.integration
@@ -21,10 +21,10 @@ async def test_balance_consistency():
         # Проверка балансов для каждого адреса из генезис-набора
         for addr in DEV_ADDR:
             # Получаем баланс из Redis
-            redis_balance = await get_balance(addr, mongodb, redis, sync=False)
+            redis_balance = await get_balance(addr, mongodb, redis)
 
             # Получаем баланс напрямую из MongoDB
-            mongo_balance = await get_balance_sync(addr, mongodb)
+            mongo_balance = await balance_from_ledger(addr, mongodb)
 
             # Сравниваем балансы
             assert redis_balance == mongo_balance, (
