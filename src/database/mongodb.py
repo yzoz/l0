@@ -1,14 +1,13 @@
-from src.models.tx import TxWrite
-from typing import List
-#from pymongo import WriteConcern
+# from pymongo import WriteConcern
 import logging
+from typing import List
+
 from pymongo import AsyncMongoClient
 
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
-)
+from src.models.tx import TxWrite
+
 logger = logging.getLogger(__name__)
+
 
 class MongoDB:
     def __init__(self):
@@ -18,14 +17,14 @@ class MongoDB:
 
     async def connect(self):
         self.client = AsyncMongoClient(
-            'mongodb://localhost:27017',
+            "mongodb://localhost:27017",
             # maxPoolSize=10000,
             # minPoolSize=1000,
             # maxIdleTimeMS=30000,
             # socketTimeoutMS=2000,
             # connectTimeoutMS=2000
         )
-        self.db = self.client['feo']
+        self.db = self.client["feo"]
         self.tx = self.db.tx
 
     async def insert_tx(self, tx: TxWrite) -> bool:
@@ -36,10 +35,10 @@ class MongoDB:
             result = await self.tx.insert_one(dict(tx))
             logger.debug(f"Inserted transaction with _id: {result.inserted_id}")
             return result.acknowledged
-        except Exception as e:
-            #logger.error(f"Failed to insert transaction: {e}")
+        except Exception:
+            # logger.error(f"Failed to insert transaction: {e}")
             raise
-    
+
     async def insert_many_tx(self, txs: List[TxWrite]) -> bool:
         """Вставляет несколько транзакций в коллекцию tx"""
         if not txs:
@@ -64,13 +63,10 @@ class MongoDB:
             raise
 
     async def aggregate(self, pipeline: list):
-        """Выполняет агрегацию по пайплайну"""
+        """Выполняет агрегацию по пайплайну и возвращает все документы."""
         try:
-            cursor = self.tx.aggregate(pipeline)
-            results = []
-            async for doc in await cursor:
-                results.append(doc)
-                break  # Ограничиваем результат одним документом
+            cursor = await self.tx.aggregate(pipeline)
+            results = [doc async for doc in cursor]
             logger.debug(f"Aggregate pipeline: {pipeline}, result: {results}")
             return results if results else None
         except Exception as e:
