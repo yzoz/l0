@@ -1,23 +1,21 @@
 """Тесты для consumer.py
 └─$ poetry run pytest tests/ -v
 """
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import json
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import asyncio
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
-from contextlib import asynccontextmanager
 from aio_pika import IncomingMessage
-from src.database.queues import RabbitMQ
-from src.database.mongodb import MongoDB
-from src.database.redis import Redis
-from src.database.graph import Memgraph
-from src.models.tx import TxStore
+
 from service.consumer import ConsumerProcessor, ConsumerService
+from src.database.graph import Memgraph
+from src.database.mongodb import MongoDB
+from src.database.queues import RabbitMQ
+from src.database.redis import Redis
+from src.models.tx import TxStore
+
 
 # Фикстура для создания тестового объекта TxStore
 @pytest.fixture
@@ -29,8 +27,9 @@ def tx_store():
         uniq="tx123",
         parents=["parent1", "parent2"],
         msg="test",
-        sign="signature"
+        sign="signature",
     )
+
 
 # Фикстура для создания мока сообщения
 @pytest.fixture
@@ -42,15 +41,16 @@ def message(tx_store):
             "amount": tx_store.amount,
             "uniq": tx_store.uniq,
             "parents": tx_store.parents,
-            "msg": tx_store.msg
+            "msg": tx_store.msg,
         },
-        "sign": tx_store.sign
+        "sign": tx_store.sign,
     }
     message = MagicMock(spec=IncomingMessage)
     message.body = json.dumps(message_data).encode("utf-8")
     message.nack = AsyncMock()
     message.ack = AsyncMock()
     return message
+
 
 # Фикстура для создания ConsumerProcessor
 @pytest.fixture
@@ -60,11 +60,14 @@ def processor():
     redis = MagicMock(spec=Redis)
     dag = MagicMock(spec=Memgraph)
     redis.client = MagicMock()
+
     @asynccontextmanager
     async def lock(_key):
         yield
+
     redis.client.lock = lock
     return ConsumerProcessor(db, rabbitmq, redis, dag)
+
 
 # Тесты для ConsumerProcessor
 @pytest.mark.asyncio
@@ -76,12 +79,14 @@ async def test_parse_message(processor, message, tx_store):
     assert result.uniq == tx_store.uniq
     assert result.sign == tx_store.sign
 
+
 @pytest.mark.asyncio
 async def test_parse_message_invalid_json(processor, message):
     """Тест обработки некорректного JSON"""
     message.body = b"invalid_json"
     with pytest.raises(json.JSONDecodeError):
         processor.parse_message(message)
+
 
 @pytest.mark.asyncio
 async def test_check_duplicate_exists(processor, tx_store):
@@ -90,12 +95,14 @@ async def test_check_duplicate_exists(processor, tx_store):
     result = await processor.check_duplicate(tx_store)
     assert result is True
 
+
 @pytest.mark.asyncio
 async def test_check_duplicate_not_exists(processor, tx_store):
     """Тест проверки дубликатов (транзакция не существует)"""
     processor.db.find_one = AsyncMock(return_value=None)
     result = await processor.check_duplicate(tx_store)
     assert result is False
+
 
 @pytest.mark.asyncio
 async def test_verify_balance_sufficient(processor, tx_store):
@@ -104,12 +111,14 @@ async def test_verify_balance_sufficient(processor, tx_store):
         result = await processor.verify_balance(tx_store)
         assert result is True
 
+
 @pytest.mark.asyncio
 async def test_verify_balance_insufficient(processor, tx_store):
     """Тест проверки недостаточного баланса"""
     with patch("service.consumer.get_balance", AsyncMock(return_value=50)):
         result = await processor.verify_balance(tx_store)
         assert result is False
+
 
 @pytest.mark.asyncio
 async def test_verify_parents_all_exist(processor, tx_store):
@@ -118,6 +127,7 @@ async def test_verify_parents_all_exist(processor, tx_store):
     result = await processor.verify_parents("hash", tx_store)
     assert result is True
 
+
 @pytest.mark.asyncio
 async def test_verify_parents_missing(processor, tx_store):
     """Тест проверки отсутствия родителей"""
@@ -125,6 +135,7 @@ async def test_verify_parents_missing(processor, tx_store):
     processor.verify_parents = AsyncMock(return_value=False)
     result = await processor.verify_parents("hash", tx_store)
     assert result is False
+
 
 @pytest.mark.asyncio
 async def test_add_to_graph_no_cycle(processor, tx_store):
@@ -135,12 +146,14 @@ async def test_add_to_graph_no_cycle(processor, tx_store):
     assert result is True
     assert result is True
 
+
 @pytest.mark.asyncio
 async def test_add_to_graph_cycle_detected(processor, tx_store):
     """Тест обнаружения цикла при добавлении в граф"""
     processor.add_to_graph = AsyncMock(return_value=False)
     result = await processor.add_to_graph("tx_hash_123", tx_store)
     assert result is False
+
 
 @pytest.mark.asyncio
 async def test_process_transaction_duplicate(processor, message, tx_store):
@@ -150,6 +163,7 @@ async def test_process_transaction_duplicate(processor, message, tx_store):
     message.nack.assert_called_once_with(requeue=False)
     message.ack.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_process_transaction_insufficient_balance(processor, message, tx_store):
     """Тест обработки транзакции с недостаточным балансом"""
@@ -158,6 +172,7 @@ async def test_process_transaction_insufficient_balance(processor, message, tx_s
     await processor.process_transaction(tx_store, message)
     message.nack.assert_called_once_with(requeue=False)
     message.ack.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_process_transaction_missing_parents(processor, message, tx_store):
@@ -169,6 +184,7 @@ async def test_process_transaction_missing_parents(processor, message, tx_store)
     message.nack.assert_called_once_with(requeue=False)
     message.ack.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_process_transaction_success(processor, message, tx_store):
     """Тест успешной обработки транзакции"""
@@ -179,6 +195,7 @@ async def test_process_transaction_success(processor, message, tx_store):
     await processor.process_transaction(tx_store, message)
     message.ack.assert_called_once()
     message.nack.assert_not_called()
+
 
 # Тесты для ConsumerService
 @pytest.mark.asyncio
@@ -208,6 +225,7 @@ async def test_consumer_service_run():
     service.redis.close.assert_called_once()
     service.rabbit.close.assert_called_once()
     service.db.close.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_consumer_service_process_message_error(processor, message):
