@@ -374,6 +374,7 @@ async def test_consumer_counts_events():
 
     m = get_metrics()
     db, rabbit, redis, dag = MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    rabbit.publish_to_dlq = AsyncMock()
     redis.client.lock = MagicMock()
     redis.client.lock.return_value.__aenter__ = AsyncMock()
     redis.client.lock.return_value.__aexit__ = AsyncMock()
@@ -404,7 +405,9 @@ async def test_consumer_bad_format_counts():
     from service.consumer import ConsumerProcessor
 
     m = get_metrics()
-    processor = ConsumerProcessor(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    rabbit = MagicMock()
+    rabbit.publish_to_dlq = AsyncMock()
+    processor = ConsumerProcessor(rabbit, MagicMock(), MagicMock(), MagicMock())
     message = MagicMock()
     message.body = b"not-json"
     message.nack = AsyncMock()

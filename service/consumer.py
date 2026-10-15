@@ -38,7 +38,7 @@ class ConsumerProcessor:
             logger.error("Failed to parse message: Invalid JSON format")
             metrics.inc("bad_format")
             metrics.event("error", "format", "формат сообщения: невалидный JSON", key="format")
-            await message.nack(requeue=False)
+            await self._reject(message, "bad-json")
         except asyncio.TimeoutError:
             logger.error("Timeout during processing")
             metrics.inc("error")
@@ -48,7 +48,12 @@ class ConsumerProcessor:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
             metrics.inc("error")
             metrics.event("error", "error", f"ошибка обработки: {type(e).__name__}", key=f"error:{type(e).__name__}")
-            await message.nack(requeue=False)
+            await self._reject(message, f"error:{type(e).__name__}")
+
+    async def _reject(self, message: IncomingMessage, reason: str) -> None:
+        """Отбраковывает сообщение: копия уходит в DLQ, оригинал — в отказ."""
+        await self.rabbit.publish_to_dlq(message, reason)
+        await message.nack(requeue=False)
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
         """Преобразует сырые данные сообщения в объект TxStore"""
@@ -63,43 +68,74 @@ class ConsumerProcessor:
         short = tx_hash[:8]
         metrics.inc("received")
         async with self.redis.client.lock(f"consumer:{tx_hash}"):
-            # Проверка дубликатов
+            # Проверка дубликатов (заодно резервирует uniq в Redis)
             if await self.check_duplicate(tx):
                 logger.info(f"Duplicate transaction: {tx_hash}")
                 metrics.inc("dup")
                 metrics.event("warn", "dup", f"{short} дубликат", ref=tx_hash, key=f"dup:{tx_hash}")
-                await message.nack(requeue=False)
+                await self._reject(message, "dup")
                 return
 
-            # Проверка баланса
-            if not await self.verify_balance(tx):
-                logger.info(f"Insufficient funds for {tx.credit}")
-                metrics.inc("no_funds")
-                metrics.event("warn", "funds", f"{short} недостаточно средств", ref=tx_hash, key=f"funds:{tx_hash}")
-                await message.nack(requeue=False)
-                return
+            # Дальше uniq зарезервирован: на любом отказе резерв снимается,
+            # иначе ретрай легитимной транзакции был бы забракован как дубликат.
+            try:
+                # Проверка баланса
+                if not await self.verify_balance(tx):
+                    logger.info(f"Insufficient funds for {tx.credit}")
+                    metrics.inc("no_funds")
+                    metrics.event(
+                        "warn", "funds", f"{short} недостаточно средств", ref=tx_hash, key=f"funds:{tx_hash}"
+                    )
+                    await self._reject(message, "funds")
+                    await self.release_uniq(tx)
+                    return
 
-            # Проверка наличия родителей
-            if not await self.verify_parents(tx_hash, tx):
-                metrics.inc("no_parent")
-                metrics.event("warn", "parent", f"{short} нет родителя", ref=tx_hash, key=f"parent:{tx_hash}")
-                await message.nack(requeue=False)
-                return
+                # Проверка наличия родителей
+                if not await self.verify_parents(tx_hash, tx):
+                    metrics.inc("no_parent")
+                    metrics.event("warn", "parent", f"{short} нет родителя", ref=tx_hash, key=f"parent:{tx_hash}")
+                    await self._reject(message, "parent")
+                    await self.release_uniq(tx)
+                    return
 
-            # Проверка и добавление в граф
-            if not await self.add_to_graph(tx_hash, tx):
-                await message.nack(requeue=False)
-                return
+                # Проверка и добавление в граф
+                if not await self.add_to_graph(tx_hash, tx):
+                    await self._reject(message, "graph")
+                    await self.release_uniq(tx)
+                    return
 
-            await message.ack()
+                await message.ack()
+            except BaseException:
+                # Сбой/таймаут: сообщение может вернуться в очередь — резерв
+                # снимаем, чтобы повторная доставка не стала дубликатом.
+                await self.release_uniq(tx)
+                raise
+
             logger.info(f"Transaction {tx_hash} processed and added to graph")
             metrics.inc("added")
             metrics.event("ok", "added", f"{short} добавлена", ref=tx_hash, key=f"added:{tx_hash}")
 
     async def check_duplicate(self, tx: TxStore) -> bool:
-        """Проверяет, существует ли уже такая транзакция в базе"""
+        """Проверяет дубликат (credit, uniq) и атомарно резервирует uniq.
+
+        Ключ ``uniq:{credit}:{uniq}`` ставится через SET NX — это primary-гард,
+        ловящий даже параллельные in-flight транзакции; реестр MongoDB остаётся
+        backstop-ом на случай потери Redis. Резерв снимается (``release_uniq``)
+        на любом пути отказа, чтобы легитимный ретрай не считался дубликатом;
+        после успешного добавления в граф ключ остаётся навсегда.
+        """
+        reserved = await self.redis.client.set(f"uniq:{tx.credit}:{tx.uniq}", 1, nx=True)
+        if not reserved:
+            return True
         exists = await self.db.find_one({"credit": tx.credit, "uniq": tx.uniq})
         return bool(exists)
+
+    async def release_uniq(self, tx: TxStore) -> None:
+        """Снимает резерв uniq после отказа, чтобы транзакцию можно было ретраить."""
+        try:
+            await self.redis.client.delete(f"uniq:{tx.credit}:{tx.uniq}")
+        except Exception as e:
+            logger.error("Failed to release uniq for %s: %s", tx.credit, e)
 
     async def verify_balance(self, tx: TxStore) -> bool:
         """Проверяет, достаточно ли средств для выполнения транзакции"""

@@ -72,7 +72,8 @@ class TxStore(Tx):
 
 class TxWrite(TxStore):
     hash: str
-    v: Optional[int] = 1
+    # v=2: формат сериализации ordered_sum с разделителями (см. src/utils/data.py)
+    v: Optional[int] = 2
     time: int
 
 

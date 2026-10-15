@@ -1,8 +1,14 @@
 import logging
 
-from aio_pika import DeliveryMode, Message, connect_robust
+from aio_pika import DeliveryMode, IncomingMessage, Message, connect_robust
 
 logger = logging.getLogger(__name__)
+
+# Очередь транзакций и её dead-letter «парковка»: всё, что consumer
+# отбраковал (nack без requeue), копируется в tx.dlq вместо потери —
+# сообщения можно разобрать и реплеить.
+TX_QUEUE = "tx"
+DLQ_QUEUE = "tx.dlq"
 
 
 class RabbitMQ:
@@ -15,20 +21,28 @@ class RabbitMQ:
         self.connection = await connect_robust("amqp://guest:guest@localhost/")
         self.channel = await self.connection.channel()
         # await self.rabbitmq.channel.set_qos(prefetch_count=1)
-        """try: # Создание dead-letter очереди
-            await self.channel.declare_queue(
-                "dead-letter",
-                durable=True,
-                arguments={"x-dead-letter-exchange": "", "x-dead-letter-routing-key": "tx"}
-            )
-        except Exception as e:
-            logging.error(e)"""
+        await self.channel.declare_queue(DLQ_QUEUE, durable=True)
 
     async def publish_message(self, queue_name, message: str):
         """Публикация сообщения в очередь."""
         await self.channel.default_exchange.publish(
             Message(message.encode("utf-8"), delivery_mode=DeliveryMode.PERSISTENT), routing_key=queue_name
         )
+
+    async def publish_to_dlq(self, message: IncomingMessage, reason: str):
+        """Сохраняет отбракованное сообщение в DLQ (вместе с причиной отказа)."""
+        try:
+            await self.channel.default_exchange.publish(
+                Message(
+                    message.body,
+                    delivery_mode=DeliveryMode.PERSISTENT,
+                    headers={"x-dlq-reason": reason},
+                ),
+                routing_key=DLQ_QUEUE,
+            )
+        except Exception as e:
+            # DLQ — best effort: само сообщение всё равно отбраковывается.
+            logger.error("Failed to publish message to DLQ (%s): %s", reason, e)
 
     async def consume_messages(self, queue_name: str, callback: callable, stop_event=None):
         """Потребление сообщений из очереди."""

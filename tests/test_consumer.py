@@ -66,7 +66,10 @@ def processor():
         yield
 
     redis.client.lock = lock
-    return ConsumerProcessor(db, rabbitmq, redis, dag)
+    rabbitmq.publish_to_dlq = AsyncMock()
+    redis.client.set = AsyncMock(return_value=True)
+    redis.client.delete = AsyncMock()
+    return ConsumerProcessor(rabbitmq, db, redis, dag)
 
 
 # Тесты для ConsumerProcessor
@@ -90,7 +93,9 @@ async def test_parse_message_invalid_json(processor, message):
 
 @pytest.mark.asyncio
 async def test_check_duplicate_exists(processor, tx_store):
-    """Тест проверки дубликатов (транзакция существует)"""
+    """Тест проверки дубликатов (транзакция существует в реестре)"""
+    processor.redis.client.set = AsyncMock(return_value=True)
+    processor.redis.client.delete = AsyncMock()
     processor.db.find_one = AsyncMock(return_value={"credit": tx_store.credit, "uniq": tx_store.uniq})
     result = await processor.check_duplicate(tx_store)
     assert result is True
@@ -99,9 +104,19 @@ async def test_check_duplicate_exists(processor, tx_store):
 @pytest.mark.asyncio
 async def test_check_duplicate_not_exists(processor, tx_store):
     """Тест проверки дубликатов (транзакция не существует)"""
+    processor.redis.client.set = AsyncMock(return_value=True)
+    processor.redis.client.delete = AsyncMock()
     processor.db.find_one = AsyncMock(return_value=None)
     result = await processor.check_duplicate(tx_store)
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_check_duplicate_uniq_already_reserved(processor, tx_store):
+    """Тест проверки дубликатов (uniq уже зарезервирован в Redis)"""
+    processor.redis.client.set = AsyncMock(return_value=None)
+    result = await processor.check_duplicate(tx_store)
+    assert result is True
 
 
 @pytest.mark.asyncio

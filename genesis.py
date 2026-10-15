@@ -34,7 +34,9 @@ async def main():
     txs.drop()
     logger.info("MongoDB collection 'tx' dropped")
     txs.create_indexes([IndexModel([("hash", ASCENDING)], unique=True)])
-    txs.create_indexes([IndexModel([("credit", ASCENDING), ("uniq", 1)])])
+    # uniq — порядковый номер транзакции с конкретного адреса: пара
+    # (credit, uniq) обязана быть уникальной среди подтверждённых.
+    txs.create_indexes([IndexModel([("credit", ASCENDING), ("uniq", ASCENDING)], unique=True)])
 
     # Подключение к Redis
     await redis_client.flushall()
@@ -47,7 +49,7 @@ async def main():
             debit="9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
             credit="",
             amount=500000000000000,
-            uniq="",
+            uniq="1",
             sign="",
             msg="genesis",
         ),
@@ -56,7 +58,7 @@ async def main():
             debit="RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR",
             credit="",
             amount=330000000000000,
-            uniq="",
+            uniq="2",
             sign="",
             msg="genesis2",
         ),
@@ -65,7 +67,7 @@ async def main():
             debit="2RAHCZg7SfyLY6x5uLmtDh1tNbZr4w5NTPMWXpHrqdyc",
             credit="",
             amount=250000000000000,
-            uniq="",
+            uniq="3",
             sign="",
             msg="genesis3",
         ),
