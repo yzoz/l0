@@ -40,5 +40,5 @@ conf: ## Запустить confirmer
 write: ## Запустить writer
 	poetry run python run.py write
 
-tx: ## Запустить writer
+tx: ## Запустить генерацию транзакций
 	poetry run python tx_bot.py

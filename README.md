@@ -57,16 +57,29 @@ cp .env.example .env
 
 Замените все значения в `.env` уникальными credentials. Не публикуйте файл `.env`. При публичном запуске InfluxDB credentials должны быть заменены, а ранее раскрытые значения — отозваны/ротированы.
 
+---
+При инициализированных данных запускается одной командой в многопанельном tmux:
+
+```bash
+start
+```
+---
+
 Запустите локальные зависимости (порты привязаны к loopback):
 
 ```bash
 docker compose up -d
 ```
 
-Инициализируйте данные при необходимости и запустите API:
+Инициализируйте данные при необходимости:
 
 ```bash
 poetry run python genesis.py
+```
+
+Запустите API:
+
+```bash
 poetry run fastapi run api.py --host 127.0.0.1 --port 8000
 ```
 
@@ -81,7 +94,7 @@ poetry run python service.py SERVICE
 
 Остановка зависимостей: `docker compose down`. Для удаления также сохранённых данных используйте `docker compose down -v`.
 
-Частые команды также собраны в `Makefile` (`make up`, `make genesis`, `make api`, `make test`, `make lint`).
+Частые команды также собраны в `Makefile` (`make up`, `make genesis`, `make api`, `make cons`, `make conf`, `make write`, `make tx`, `make logs`, `make install`, `make test`, `make test-all`, `make lint`, `make down`).
 
 ## Примеры API
 

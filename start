@@ -1,9 +1,33 @@
 #!/bin/zsh
-tmux new-session -d 'docker compose up'
-sleep 5
-tmux split-window -h 'fastapi dev api.py'
-sleep 5
-tmux split-window -h 'python consumer.py'
-#tmux swap-pane -U
-#tmux swap-pane -D
-tmux attach-session -d
+set -e
+
+cd "$(dirname "$0")"
+
+SESSION=l0
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  tmux attach-session -t "$SESSION"
+  exit 0
+fi
+
+make up
+sleep 3
+
+pane() {
+  if [ -z "$PANE_STARTED" ]; then
+    tmux new-session -d -s "$SESSION" -c "$PWD" -n l0 "$1; exec zsh"
+    PANE_STARTED=1
+  else
+    tmux split-window -t "$SESSION" -c "$PWD" "$1; exec zsh"
+  fi
+  tmux select-layout -t "$SESSION" tiled
+}
+
+pane "make logs"
+pane "make api"
+pane "make cons"
+pane "make conf"
+pane "make write"
+pane "make tx"
+
+tmux attach-session -t "$SESSION"
