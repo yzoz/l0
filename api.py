@@ -1,13 +1,16 @@
-from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from strawberry.fastapi import GraphQLRouter
+
+from src.api.routers import pool, root, transactions
+from src.api.schema import schema
+from src.database.graph import Memgraph
 from src.database.mongodb import MongoDB
 from src.database.queues import RabbitMQ
 from src.database.redis import Redis
-from src.database.graph import Memgraph
-from src.api.routers import transactions, root, pool
-from src.api.schema import schema
-from strawberry.fastapi import GraphQLRouter
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,6 +30,7 @@ async def lifespan(app: FastAPI):
     await app.state.redis.close()
     await app.state.graph.close()
 
+
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
@@ -37,17 +41,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Dependency для MongoDB
-async def get_mongodb(app: FastAPI = Depends(lambda: app)):
-    return app.state.db
+async def get_mongodb(request: Request):
+    return request.app.state.db
+
 
 # Dependency для Redis
-async def get_redis(app: FastAPI = Depends(lambda: app)):
-    return app.state.redis
+async def get_redis(request: Request):
+    return request.app.state.redis
+
 
 # Настройка Strawberry GraphQL
 async def get_context(mongodb: MongoDB = Depends(get_mongodb), redis: Redis = Depends(get_redis)):
     return {"db": mongodb, "redis": redis}
+
 
 graphql_router = GraphQLRouter(schema, context_getter=get_context)
 
