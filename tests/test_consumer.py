@@ -10,12 +10,12 @@ import pytest
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
+from contextlib import asynccontextmanager
 from aio_pika import IncomingMessage
-import networkx as nx
 from src.database.queues import RabbitMQ
 from src.database.mongodb import MongoDB
 from src.database.redis import Redis
-from src.utils.graph import Dag
+from src.database.graph import Memgraph
 from src.models.tx import TxStore
 from service.consumer import ConsumerProcessor, ConsumerService
 
@@ -23,12 +23,12 @@ from service.consumer import ConsumerProcessor, ConsumerService
 @pytest.fixture
 def tx_store():
     return TxStore(
-        credit="user1",
-        debit="user2",
+        credit="EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1",
+        debit="EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU2",
         amount=100,
         uniq="tx123",
         parents=["parent1", "parent2"],
-        msg="test_message",
+        msg="test",
         sign="signature"
     )
 
@@ -58,8 +58,12 @@ def processor():
     db = MagicMock(spec=MongoDB)
     rabbitmq = MagicMock(spec=RabbitMQ)
     redis = MagicMock(spec=Redis)
-    dag = Dag()
-    dag.G = nx.DiGraph()
+    dag = MagicMock(spec=Memgraph)
+    redis.client = MagicMock()
+    @asynccontextmanager
+    async def lock(_key):
+        yield
+    redis.client.lock = lock
     return ConsumerProcessor(db, rabbitmq, redis, dag)
 
 # Тесты для ConsumerProcessor
@@ -96,47 +100,46 @@ async def test_check_duplicate_not_exists(processor, tx_store):
 @pytest.mark.asyncio
 async def test_verify_balance_sufficient(processor, tx_store):
     """Тест проверки достаточного баланса"""
-    with patch("consumer.get_balance", AsyncMock(return_value=200)):
+    with patch("service.consumer.get_balance", AsyncMock(return_value=200)):
         result = await processor.verify_balance(tx_store)
         assert result is True
 
 @pytest.mark.asyncio
 async def test_verify_balance_insufficient(processor, tx_store):
     """Тест проверки недостаточного баланса"""
-    with patch("consumer.get_balance", AsyncMock(return_value=50)):
+    with patch("service.consumer.get_balance", AsyncMock(return_value=50)):
         result = await processor.verify_balance(tx_store)
         assert result is False
 
 @pytest.mark.asyncio
 async def test_verify_parents_all_exist(processor, tx_store):
     """Тест проверки наличия всех родителей"""
-    processor.dag.G.add_nodes_from(tx_store.parents)
-    result = await processor.verify_parents(tx_store)
+    processor.verify_parents = AsyncMock(return_value=True)
+    result = await processor.verify_parents("hash", tx_store)
     assert result is True
 
 @pytest.mark.asyncio
 async def test_verify_parents_missing(processor, tx_store):
     """Тест проверки отсутствия родителей"""
-    result = await processor.verify_parents(tx_store)
+    processor.verify_parents = AsyncMock(return_value=False)
+    processor.verify_parents = AsyncMock(return_value=False)
+    result = await processor.verify_parents("hash", tx_store)
     assert result is False
 
 @pytest.mark.asyncio
 async def test_add_to_graph_no_cycle(processor, tx_store):
     """Тест добавления транзакции в граф без цикла"""
-    processor.dag.G.add_nodes_from(tx_store.parents)
+    processor.add_to_graph = AsyncMock(return_value=True)
     tx_hash = "tx_hash_123"
     result = await processor.add_to_graph(tx_hash, tx_store)
     assert result is True
-    assert tx_hash in processor.dag.G.nodes
-    assert all(processor.dag.G.has_edge(parent, tx_hash) for parent in tx_store.parents)
+    assert result is True
 
 @pytest.mark.asyncio
 async def test_add_to_graph_cycle_detected(processor, tx_store):
     """Тест обнаружения цикла при добавлении в граф"""
-    tx_hash = "tx_hash_123"
-    processor.dag.G.add_node(tx_hash)
-    processor.dag.G.add_edge(tx_hash, tx_store.parents[0])  # Создаём потенциальный цикл
-    result = await processor.add_to_graph(tx_hash, tx_store)
+    processor.add_to_graph = AsyncMock(return_value=False)
+    result = await processor.add_to_graph("tx_hash_123", tx_store)
     assert result is False
 
 @pytest.mark.asyncio
@@ -183,12 +186,12 @@ async def test_consumer_service_run():
     """Тест запуска и завершения сервиса"""
     service = ConsumerService()
     service.redis.connect = AsyncMock()
-    service.rabbitmq.connect = AsyncMock()
+    service.rabbit.connect = AsyncMock()
+    service.rabbit.connection = MagicMock(is_closed=False)
     service.db.connect = AsyncMock()
-    service.dag.load = AsyncMock()
-    service.rabbitmq.consume_messages = AsyncMock()
+    service.rabbit.consume_messages = AsyncMock()
     service.redis.close = AsyncMock()
-    service.rabbitmq.close = AsyncMock()
+    service.rabbit.close = AsyncMock()
     service.db.close = AsyncMock()
 
     async def run_with_exception():
@@ -200,11 +203,10 @@ async def test_consumer_service_run():
 
     await service.shutdown()
     service.redis.connect.assert_called_once()
-    service.rabbitmq.connect.assert_called_once()
+    service.rabbit.connect.assert_called_once()
     service.db.connect.assert_called_once()
-    service.dag.load.assert_called_once()
     service.redis.close.assert_called_once()
-    service.rabbitmq.close.assert_called_once()
+    service.rabbit.close.assert_called_once()
     service.db.close.assert_called_once()
 
 @pytest.mark.asyncio

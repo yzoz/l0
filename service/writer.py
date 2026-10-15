@@ -7,12 +7,14 @@ from src.database.graph import Memgraph
 import os
 import asyncio
 from pymongo.errors import DuplicateKeyError
+from src.utils.profile import get_balance
 
 logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Config:
     WEIGHT: int = 10
+    DEV_ADDR: set = ("9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy","RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR","2RAHCZg7SfyLY6x5uLmtDh1tNbZr4w5NTPMWXpHrqdyc")
 
 class WriterProcessor:
     def __init__(self, db: MongoDB, redis: Redis, dag: Memgraph):
@@ -47,8 +49,22 @@ class WriterProcessor:
                     confirmed_key = f"confirmed:{t["hash"]}"
                     async with self.redis.client.lock(f"writer:{t["hash"]}"):
                         if not await self.redis.client.exists(confirmed_key):
+                            
                             tx = self.create_tx(t["hash"], t["data"])
-                        
+                            balance = await get_balance(tx.credit, self.db, self.redis)
+                            if balance < tx.amount and "genesis" not in tx.msg:
+                                try:
+                                    async with self.redis.client.lock(f"dag:{tx.hash}"):
+                                        await session.run(
+                                            """
+                                            MATCH (t:Transaction {hash: $hash})
+                                            DETACH DELETE t
+                                            """,
+                                            hash=tx.hash
+                                        )
+                                except Exception as e:
+                                    logger.error(f"Service error: {e}")
+                                return
                             success = await self.db.insert_tx(tx)
                             logger.info(f"Confirmed TX saved: {tx.hash}" if success else f"Failed to save: {tx.hash}")
                             if success:
@@ -100,7 +116,7 @@ class WriterProcessor:
     async def periodic_check_pool(self, stop_event=None):
         while not (stop_event and stop_event.is_set()):
             await self.check_pool()
-            await asyncio.sleep(0.025)
+            await asyncio.sleep(0.1)
 
 class WriterService:
     def __init__(self):

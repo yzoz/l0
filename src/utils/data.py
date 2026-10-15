@@ -8,6 +8,6 @@ def ordered_sum(t: dict) -> str:
     s = dict(sorted(t.items()))
     m = ''
     for t in s.values():
-        if isinstance(t, list): t = "".join(sorted(t))
+        if isinstance(t, list): t = "".join(t)
         m += str(t)
     return m

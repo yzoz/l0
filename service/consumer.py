@@ -58,7 +58,7 @@ class ConsumerProcessor:
 
             # Проверка баланса
             if not await self.verify_balance(tx):
-                logger.info(f"Insufficient funds for {tx_hash}")
+                logger.info(f"Insufficient funds for {tx.credit}")
                 await message.nack(requeue=False)
                 return
 
@@ -73,7 +73,7 @@ class ConsumerProcessor:
                 return
 
             await message.ack()
-            #logger.info(f"Transaction {tx_hash} processed and added to graph")
+            logger.info(f"Transaction {tx_hash} processed and added to graph")
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -83,6 +83,8 @@ class ConsumerProcessor:
     async def verify_balance(self, tx: TxStore) -> bool:
         """Проверяет, достаточно ли средств для выполнения транзакции"""
         balance = await get_balance(tx.credit, self.db, self.redis)
+        """if tx.credit == "8Aq9TxgVtGCLcpyTmJpqj7D6a9WriTVHAmjEvdDxaHfJ":
+            print(tx.credit, balance, tx.amount, balance - tx.amount)"""
         return balance >= tx.amount
 
     async def verify_parents(self, tx_hash: str, tx: TxStore) -> bool:

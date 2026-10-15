@@ -7,8 +7,9 @@ import logging
 import asyncio
 from hashlib import sha512
 from fastapi.encoders import jsonable_encoder
+from nacl.exceptions import BadSignatureError
 
-logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -23,13 +24,16 @@ async def send(
     tx: TxRead,
     rabbit = Depends(get_rabbit)
 ):
+    print(ordered_sum(dict(tx.content)))
     try:
         logger.info(f"Processing transaction: uniq={tx.content.uniq}, credit={tx.content.credit}, debit={tx.content.debit}")
 
         # Проверка подписи
         message_to_verify = sha512(ordered_sum(dict(tx.content)).encode('utf-8')).digest()
-        verified_message = verify_message(tx.content.credit, tx.sign)
-        logger.info(f"Message to verify: {message_to_verify} | Verified message: {verified_message}")
+        try:
+            verified_message = verify_message(tx.content.credit, tx.sign, message_to_verify)
+        except (BadSignatureError, ValueError, TypeError):
+            verified_message = False
         if verified_message != message_to_verify:
             logger.warning(f"Signature verification failed: credit={tx.content.credit}")
             raise HTTPException(status_code=400, detail=[{"success": 0, "msg": "Bad sign!"}])
@@ -50,5 +54,5 @@ async def send(
     except HTTPException as e:
         raise e
     except Exception as e:
-        logger.error(f"Unexpected error in send: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=[{"success": 0, "msg": f"server error: {str(e)}"}])
+        logger.error("Unexpected error in send", exc_info=True)
+        raise HTTPException(status_code=500, detail=[{"success": 0, "msg": "Internal server error"}])

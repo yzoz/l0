@@ -6,7 +6,7 @@ import signal
 import time
 
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)

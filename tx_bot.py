@@ -13,7 +13,7 @@ from keys import pk, sk
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format='%(asctime)s - %(process)d - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ async def arange(count):
     """Генератор для асинхронного перебора чисел.""" 
     for i in range(count):
         yield i
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.25)
         #if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 2.5), 3))
         #if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 5), 3))
         #await asyncio.sleep(round(random.uniform(0.01, 0.05), 3))
@@ -40,7 +40,7 @@ async def send(t, client):
     """Отправка случайных транзакций в асинхронном режиме."""
     async for _ in arange(int(t)):
         n = len(sk) - 1
-        i = random.randint(0, n)
+        i = random.randint(0, n)   
         c = pk[i]  # credit (отправитель)
         priv = sk[i]  # приватный ключ
         d = pk[random.randint(0, n)]  # debit (получатель)

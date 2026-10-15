@@ -9,14 +9,14 @@ from src.models.tx import TxWrite
 @pytest.fixture
 def tx_write():
     return TxWrite(
-        credit="user1",
-        debit="user2",
+        credit="EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1",
+        debit="EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU2",
         amount=100,
         uniq="tx123",
         parents=["parent1", "parent2"],
-        msg="test_message",
+        msg="test",
         sign="signature",
-        tx_hash="tx_hash_123",
+        hash="tx_hash_123",
         time=1234567890
     )
 
@@ -86,9 +86,10 @@ async def test_aggregate_success(mongodb):
     """Тест успешной агрегации"""
     pipeline = [{"$match": {"uniq": "tx123"}}]
     mock_result = [{"uniq": "tx123", "amount": 100}]
-    mock_cursor = MagicMock()
-    mock_cursor.to_list = AsyncMock(return_value=mock_result)
-    mongodb.tx.aggregate = MagicMock(return_value=mock_cursor)
+    async def cursor():
+        for item in mock_result:
+            yield item
+    mongodb.tx.aggregate = AsyncMock(return_value=cursor())
     result = await mongodb.aggregate(pipeline)
     assert result == mock_result
     mongodb.tx.aggregate.assert_called_once_with(pipeline)
@@ -97,9 +98,10 @@ async def test_aggregate_success(mongodb):
 async def test_aggregate_empty(mongodb):
     """Тест пустого результата агрегации"""
     pipeline = [{"$match": {"uniq": "tx123"}}]
-    mock_cursor = MagicMock()
-    mock_cursor.to_list = AsyncMock(return_value=[])
-    mongodb.tx.aggregate = MagicMock(return_value=mock_cursor)
+    async def cursor():
+        if False:
+            yield None
+    mongodb.tx.aggregate = AsyncMock(return_value=cursor())
     result = await mongodb.aggregate(pipeline)
     assert result is None
     mongodb.tx.aggregate.assert_called_once_with(pipeline)
@@ -123,9 +125,10 @@ async def test_find_success(mongodb):
 async def test_close(mongodb):
     """Тест закрытия соединения"""
     mongodb.client = MagicMock()
-    mongodb.client.close = AsyncMock()
+    client = mongodb.client
+    client.close = AsyncMock()
     await mongodb.close()
-    mongodb.client.close.assert_called_once()
+    client.close.assert_called_once()
     assert mongodb.client is None
     assert mongodb.db is None
     assert mongodb.tx is None
