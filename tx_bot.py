@@ -90,7 +90,7 @@ def main():
     try:
         t = int(args[0])
     except IndexError:
-        t = 100
+        t = 1000
     try:
         c = int(args[1])
     except IndexError:

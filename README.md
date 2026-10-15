@@ -76,7 +76,7 @@ poetry run fastapi run api.py --host 127.0.0.1 --port 8000
 Фоновые процессы запускаются отдельно; замените `SERVICE` на `cons`, `conf` или `write`:
 
 ```bash
-poetry run python run.py SERVICE [N-processes]
+poetry run python service.py SERVICE
 ```
 
 Остановка зависимостей: `docker compose down`. Для удаления также сохранённых данных используйте `docker compose down -v`.

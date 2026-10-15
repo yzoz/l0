@@ -22,14 +22,14 @@ services:
       - "127.0.0.1:6379:6379"
 
   memgraph:
-    image: memgraph/memgraph:3.3
+    image: memgraph/memgraph:latest
     container_name: memgraph
     hostname: memgraph
     ports:
       - "127.0.0.1:7687:7687"
 
   memlab:
-    image: memgraph/lab:3.5
+    image: memgraph/lab:latest
     container_name: memlab
     hostname: memlab
     ports:
@@ -41,7 +41,7 @@ services:
       - memgraph
 
   influxdb2:
-    image: influxdb:2.7.11
+    image: influxdb:2
     container_name: influx
     hostname: influx
     ports:

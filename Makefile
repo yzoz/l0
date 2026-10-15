@@ -31,11 +31,14 @@ format: ## Автоформатирование
 	poetry run ruff format .
 	poetry run ruff check . --fix
 
-run-cons: ## Запустить consumer
+cons: ## Запустить consumer
 	poetry run python run.py cons
 
-run-conf: ## Запустить confirmer
+conf: ## Запустить confirmer
 	poetry run python run.py conf
 
-run-write: ## Запустить writer
+write: ## Запустить writer
 	poetry run python run.py write
+
+tx: ## Запустить writer
+	poetry run python tx_bot.py
