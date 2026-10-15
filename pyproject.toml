@@ -1,8 +1,7 @@
 [project]
 name = "l0-python"
 version = "0.1.0"
-description = ""
-package-mode = false
+description = "DAG-based transaction ledger prototype with a FastAPI and GraphQL API."
 authors = [
     {name = "YZoZ",email = "mail@yzoz.com"}
 ]
@@ -28,6 +27,17 @@ fakeredis = "^2.23"
 networkx = "^3.4.2"
 watchfiles = "^1.0.5"
 watchdog = {extras = ["watchmedo"], version = "^6.0.0"}
+
+[tool.poetry]
+package-mode = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-m 'not integration'"
+markers = [
+    "integration: requires external services such as MongoDB and Redis",
+]
 
 [tool.poetry.scripts]
 fast = "fastapi run api.py --workers=3 --reload"

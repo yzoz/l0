@@ -1,40 +1,39 @@
 services:
   rabbitmq:
-    image: rabbitmq:management
+    image: rabbitmq:4.1-management
     container_name: rabbit
     hostname: rabbit
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
 
   mongodb:
-    image: mongo:latest
+    image: mongo:8.0
     container_name: mongo
     hostname: mongo
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
 
-  keydb:
-    image: eqalpha/keydb:latest
-    command: keydb-server /etc/keydb/keydb.conf --server-threads 2 --bind 0.0.0.0
-    container_name: keydb
-    hostname: keydb
+  redis:
+    image: redis:7.4
+    container_name: redis
+    hostname: redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   memgraph:
-    image: memgraph/memgraph:latest
+    image: memgraph/memgraph:3.3
     container_name: memgraph
     hostname: memgraph
     ports:
-      - "7687:7687"
+      - "127.0.0.1:7687:7687"
 
   memlab:
-    image: memgraph/lab:latest
+    image: memgraph/lab:3.5
     container_name: memlab
     hostname: memlab
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - MEMGRAPH_HOST=memgraph
       - MEMGRAPH_PORT=7687
@@ -42,22 +41,18 @@ services:
       - memgraph
 
   influxdb2:
-    image: influxdb:2
+    image: influxdb:2.7.11
     container_name: influx
     hostname: influx
     ports:
       - "127.0.0.1:8086:8086"
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME_FILE: /run/secrets/influxdb2-admin-username
-      DOCKER_INFLUXDB_INIT_PASSWORD_FILE: /run/secrets/influxdb2-admin-password
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: /run/secrets/influxdb2-admin-token
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME:?Set INFLUXDB_USERNAME in .env}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:?Set INFLUXDB_PASSWORD in .env}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:?Set INFLUXDB_TOKEN in .env}
       DOCKER_INFLUXDB_INIT_ORG: feonyx
       DOCKER_INFLUXDB_INIT_BUCKET: stat
-    secrets:
-      - influxdb2-admin-username
-      - influxdb2-admin-password
-      - influxdb2-admin-token
     volumes:
       - type: volume
         source: influxdb2-data
@@ -65,14 +60,6 @@ services:
       - type: volume
         source: influxdb2-config
         target: /etc/influxdb2
-secrets:
-  influxdb2-admin-username:
-    file: config/.env.influxdb2-admin-username
-  influxdb2-admin-password:
-    file: config/.env.influxdb2-admin-password
-  influxdb2-admin-token:
-    file: config/.env.influxdb2-admin-token
-
 volumes:
   influxdb2-data:
   influxdb2-config:

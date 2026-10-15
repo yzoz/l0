@@ -32,8 +32,6 @@ async def get_balance(addr: str, db: MongoDB, redis: Redis, sync = False) -> int
             if balance is None:
                 balance = await asyncio.wait_for(get_balance_sync(addr, db), timeout=1) or 0
                 await redis.client.set(balance_key, balance)
-            else:
-                balance = int(balance)
-            return balance
+            return int(balance)
         except asyncio.TimeoutError:
             return 0

@@ -1,168 +1,80 @@
 # l0-python
 
-![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Version](https://img.shields.io/badge/Version-0.1.0-orange.svg)
+Прототип распределённого реестра транзакций на DAG. Проект использует FastAPI и Strawberry GraphQL для API, RabbitMQ для очередей, MongoDB для хранения подтверждённых транзакций, Redis для кэширования и Memgraph для графа транзакций. Подписи транзакций проверяются с помощью Ed25519 (PyNaCl).
 
-Проект представляет собой реализацию открытой, неизменяемой и доказуемой бухгалтерской книги на основе направленного ациклического графа (DAG). Это децентрализованная система для обработки транзакций, использующая Memgraph (графовая база данных), MongoDB (хранилище подтверждённых транзакций), Redis (кэширование и блокировки), RabbitMQ (очереди сообщений), InfluxDB (аналитика и временные ряды) и FastAPI с GraphQL для API. Основная цель — обеспечить надёжную, масштабируемую и производительную систему для обработки криптовалютных транзакций с использованием криптографических подписей для безопасности.
+## Возможности
 
-## Основные возможности
-- Создание и валидация транзакций с использованием библиотеки PyNaCl (Ed25519).
-- Асинхронная обработка транзакций через RabbitMQ.
-- Хранение данных в MongoDB с поддержкой асинхронных запросов.
-- Управление DAG (Directed Acyclic Graph) в Memgraph для подтверждения транзакций.
-- RESTful API (FastAPI) и GraphQL интерфейс (Strawberry).
-- Утилиты для генерации ключей, тестовых транзакций и ботов для нагрузочного тестирования.
-- Кэширование балансов в Redis для оптимизации производительности.
-- Поддержка весов транзакций для консенсуса на основе DAG.
+- REST API и GraphQL для работы с транзакциями.
+- Асинхронная обработка через RabbitMQ.
+- Проверка цифровых подписей и обработка графа транзакций.
+- Сервисы записи и подтверждения, а также утилиты для тестовой нагрузки.
+
+Это исследовательский прототип, а не готовая финансовая система. Не используйте его для хранения реальных средств или секретов.
 
 ## Требования
-- **Python**: 3.12+
-- **Docker**: Для запуска MongoDB, RabbitMQ, Redis, Memgraph и InfluxDB
-- **Poetry**: Для управления зависимостями
 
-## Установка
+- Python 3.12+
+- Poetry 2.x
+- Docker Compose v2
 
-### 1. Клонирование репозитория
+## Настройка и запуск
+
 ```bash
 git clone https://github.com/feonyxlab/l0-python.git
 cd l0-python
-```
-
-### 2. Установка зависимостей
-Установите Poetry, если его нет:
-```bash
-pipx install poetry
-```
-
-Активируйте виртуальное окружение:
-```bash
-python3.12 -m venv env
-source env/bin/activate
-```
-
-Установите зависимости проекта:
-```bash
 poetry install
+cp .env.example .env
 ```
 
-## Структура проекта
-```
-l0-python/
-│
-├── src/                    # Основной исходный код
-│   ├── api/                # API и GraphQL сервер
-│   │   ├── schema.py       # GraphQL схема для запросов транзакций
-│   │   ├── pool.py         # Эндпоинт для получения неподтверждённых транзакций
-│   │   └── transactions.py # Эндпоинт для отправки транзакций
-│   ├── database/           # Логика работы с базами данных
-│   │   ├── mongodb.py      # Асинхронные операции с MongoDB
-│   │   ├── redis.py        # Кэширование в Redis
-│   │   ├── graph.py        # Работа с Memgraph (DAG)
-│   │   └── queues.py       # Публикация и потребление сообщений в RabbitMQ
-│   ├── models/             # Модели данных
-│   │   └── tx.py           # Модели транзакций (Tx, TxRead, TxStore, TxWrite, TxSend)
-│   ├── utils/              # Утилиты
-│   │   ├── crypto.py       # Криптография (генерация ключей, подписи, верификация)
-│   │   ├── data.py         # Хэширование и сериализация данных
-│   └── └── profile.py      # Получение балансов
-├── service/                # Микросервисы
-│   ├── consumer.py         # Consumer для RabbitMQ, добавление транзакций в граф
-│   ├── writer.py           # Подтверждение транзакций и запись в MongoDB
-│   └── confirmer.py        # Пересчёт весов транзакций в DAG
-├── api.py                  # Точка входа в FastAPI
-├── config/                 # Конфигурации для docker
-├── tests/                  # Тесты
-├── pyproject.toml          # Конфигурация Poetry
-├── docker-compose.yml      # Docker-сервисы (MongoDB, RabbitMQ, Redis, Memgraph, InfluxDB)
-├── genesis.py              # Генерация начальных транзакций
-├── keys.py                 # Тестовые ключи
-├── tx_bot.py               # Генерация тестовых транзакций
-├── run.py                  # Продакшн раннер
-├── run.d.py                # Раннер для разработки (не работает:)
-└── README.md               # Документация
-```
+Замените все значения в `.env` уникальными credentials. Не публикуйте файл `.env`. При публичном запуске InfluxDB credentials должны быть заменены, а ранее раскрытые значения — отозваны/ротированы.
 
-## Запуск проекта
+Запустите локальные зависимости (порты привязаны к loopback):
 
-### 1. Запуск сервисов
-Запустите MongoDB, RabbitMQ, Redis, Memgraph и InfluxDB через Docker:
 ```bash
 docker compose up -d
 ```
 
-### 2. Генезис
-Сгенерируйте начальные транзакции:
+Инициализируйте данные при необходимости и запустите API:
+
 ```bash
-python genesis.py
+poetry run python genesis.py
+poetry run fastapi run api.py --host 127.0.0.1 --port 8000
 ```
 
-### 2. Запуск API
-Запустите FastAPI сервер:
+- REST/OpenAPI: <http://127.0.0.1:8000/docs>
+- GraphQL: <http://127.0.0.1:8000/graphql>
+
+Фоновые процессы запускаются отдельно; замените `SERVICE` на `cons`, `conf` или `write`:
+
 ```bash
-fastapi run api.py --workers=3 --reload
+poetry run python run.py SERVICE [N-processes]
 ```
 
-- REST API: `http://127.0.0.1:8000/docs`
-- GraphQL: `http://127.0.0.1:8000/graphql`
+Остановка зависимостей: `docker compose down`. Для удаления также сохранённых данных используйте `docker compose down -v`.
 
-### 3. Запуск Service
-В отдельных терминалах запустите сервисы:
+## Тесты
+
+Обычный набор использует моки и не требует запущенных баз данных:
+
 ```bash
-python run.py SERVICE N-processes
+poetry run pytest
 ```
 
-## Тестирование
-Бот:
+Интеграционные тесты помечены `integration` и исключены из обычного прогона. Для теста балансов сначала запустите зависимости, затем выполните:
+
 ```bash
-python tx_bot.py N-tx N-coroutines N-processes
-```
-## Сервисы
-- Memgraph Lab: `http://localhost:3000` (host: `memgraph`)
-- RabbitMQ: `http://localhost:15672` (логин/пароль: `guest`/`guest`)
-- InfluxDB: `http://localhost:8086` (логин/пароль: `admin`/`00000000`)
-- MongoDB: [Compass](https://www.mongodb.com/products/tools/compass)
-- Redis: [Insight](https://redis.io/insight/)
-
-## Пример GraphQL запроса
-Запросите транзакции через GraphQL:
-```graphql
-query {
-  getTx(addr: "EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1", limit: 10) {
-    credit
-    debit
-    amount
-    uniq
-    msg
-  }
-}
+poetry run pytest -m integration
 ```
 
-## Зависимости
-- `fastapi`: RESTful API.
-- `pynacl`: Криптография (Ed25519).
-- `base58`: Кодирование ключей.
-- `strawberry-graphql`: GraphQL сервер.
-- `aio-pika`: Асинхронная работа с RabbitMQ.
-- `pymongo`: Асинхронные операции с MongoDB.
-- `redis`: Кэширование.
-- `neo4j`: Работа с Memgraph.
+## Структура
 
-Полный список см. в `pyproject.toml`.
-
-## Алгоритм работы
-1. **Отправка транзакции** (`/send/`):
-   - Проверка подписи (Ed25519).
-   - Публикация в RabbitMQ.
-2. **Consumer**:
-   - Проверяет дубликаты, баланс, наличие родителей.
-   - Добавляет транзакцию в DAG (Memgraph).
-   - Проверяет отсутствие циклов.
-3. **Confirmer**:
-   - Пересчитывает веса транзакций в DAG на основе глубины и затухания.
-4. **Writer**:
-   - Подтверждает транзакции с весом ≥ 10.
-   - Записывает в MongoDB, обновляет балансы в Redis, удаляет из DAG.
+- `api.py` — приложение FastAPI.
+- `src/api/` — REST и GraphQL маршруты.
+- `src/database/` — клиенты MongoDB, Redis, RabbitMQ и Memgraph.
+- `service/` — consumer, confirmer и writer.
+- `tests/` — unit и интеграционные тесты.
+- `docker-compose.yaml` — локальные сервисы разработки.
 
 ## Лицензия
-MIT
+
+MIT. См. [`LICENSE`](LICENSE).

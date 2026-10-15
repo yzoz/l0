@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Config:
-    DAMPING: int = 0.5
+    DAMPING: float = 0.5
 
 class ConfirmationProcessor:
     def __init__(self, redis: Redis, dag: Memgraph):
@@ -31,7 +31,9 @@ class ConfirmationProcessor:
         # Получение потомков и глубины путей
         async with self.dag.driver.session() as session:
             # Получение всех узлов
-            #result = await session.run("MATCH (t:Transaction) RETURN t.hash")
+            result = await session.run("MATCH (t:Transaction) RETURN count(t) AS total")
+            record = await result.single()
+            print("Nodes:", record["total"])
             result = await session.run("MATCH (t:Transaction) RETURN t.hash ORDER BY rand() LIMIT 100")
             nodes = [record["t.hash"] async for record in result]
             # Пересчёт весов
@@ -76,7 +78,7 @@ class ConfirmationProcessor:
     async def periodic_check_pool(self, stop_event=None):
         while not (stop_event and stop_event.is_set()):
             await self.check_pool()
-            await asyncio.sleep(0.025)
+            await asyncio.sleep(1)
 
 class ConfirmationService:
     def __init__(self):

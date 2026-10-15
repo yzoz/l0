@@ -50,6 +50,7 @@ class Query:
     @strawberry.field
     async def tx(
             self,
+            info,
             msg: Optional[bool] = None,
             addr: str = '',
             amount: int = 0,
@@ -57,12 +58,13 @@ class Query:
             skip: int = 0,
             limit: int = 100
     ) -> List[TxType]:
-        db = MongoDB()
+        db = info.context["db"]
         return await get_tx(amount, addr, msg, time, skip, limit, db)
 
     @strawberry.field
-    async def balance(self, addr: str) -> float:
-        db = MongoDB()
-        return await get_balance(addr, db)
+    async def balance(self, info, addr: str) -> float:
+        db = info.context["db"]
+        redis = info.context["redis"]
+        return await get_balance(addr, db, redis)
 
 schema = strawberry.Schema(Query)
