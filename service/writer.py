@@ -122,7 +122,7 @@ class WriterProcessor:
 
                     tx = self.create_tx(t["hash"], t["data"])
                     balance = await get_balance(tx.credit, self.db, self.redis)
-                    if balance < tx.amount and "genesis" not in (tx.msg or ""):
+                    if balance < tx.amount:
                         # Недостаточно средств — транзакция не может быть подтверждена.
                         metrics.inc("insufficient")
                         metrics.event(

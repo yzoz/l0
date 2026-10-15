@@ -2,6 +2,7 @@
 .pytest_cache
 .vscode
 env
+.venv
 lib
 __pycache__
 .opencode
