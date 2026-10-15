@@ -12,3 +12,4 @@ config/.env.influxdb2-admin-*
 __pycache__/
 .coverage
 htmlcov/
+.l0/

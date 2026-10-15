@@ -1,4 +1,4 @@
-.PHONY: install up down logs genesis api test lint format run-cons run-conf run-write
+.PHONY: install up down logs genesis api test lint format cons conf write sys details
 
 install: ## Установить зависимости
 	poetry install
@@ -42,3 +42,9 @@ write: ## Запустить writer
 
 tx: ## Запустить генерацию транзакций
 	poetry run python tx_bot.py
+
+sys: ## Панель состояния системы (live-терминал L0)
+	poetry run python -m src.console sys
+
+details: ## Диагностический дамп роли: make details ROLE=conf
+	poetry run python -m src.console --details $(ROLE)

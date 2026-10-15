@@ -6,10 +6,12 @@ from strawberry.fastapi import GraphQLRouter
 
 from src.api.routers import pool, root, transactions
 from src.api.schema import schema
+from src.console.middleware import MetricsMiddleware
 from src.database.graph import Memgraph
 from src.database.mongodb import MongoDB
 from src.database.queues import RabbitMQ
 from src.database.redis import Redis
+from src.telemetry import metrics, start_dumper
 
 
 @asynccontextmanager
@@ -23,8 +25,11 @@ async def lifespan(app: FastAPI):
     await app.state.db.connect()
     await app.state.redis.connect()
     await app.state.graph.connect()
+    metrics.set_role("api")
+    dumper = start_dumper("api")
     yield
     # Закрытие подключений
+    dumper.cancel()
     await app.state.db.close()
     await app.state.rabbit.close()
     await app.state.redis.close()
@@ -32,6 +37,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(MetricsMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

@@ -13,6 +13,15 @@ fi
 make up
 sleep 3
 
+# L0_RAW=1 ./start — прежний режим с сырыми логами сервисов.
+if [ "$L0_RAW" = "1" ]; then
+  CMDS=("make logs" "make api" "make cons" "make conf" "make write" "make tx")
+  TITLES=("1 · LOGS (raw)" "2 · API (raw)" "3 · CONS (raw)" "4 · CONF (raw)" "5 · WRITE (raw)" "6 · TX (raw)")
+else
+  CMDS=("poetry run python -m src.console sys" "poetry run python -m src.console api" "poetry run python -m src.console cons" "poetry run python -m src.console conf" "poetry run python -m src.console write" "poetry run python -m src.console tx")
+  TITLES=("1 · СИСТЕМА" "2 · API" "3 · CONSUMER / ingress" "4 · CONFIRMER / DAG" "5 · WRITER / settlement" "6 · TX BOT")
+fi
+
 pane() {
   if [ -z "$PANE_STARTED" ]; then
     tmux new-session -d -s "$SESSION" -c "$PWD" -n l0 "$1; exec zsh"
@@ -20,14 +29,26 @@ pane() {
   else
     tmux split-window -t "$SESSION" -c "$PWD" "$1; exec zsh"
   fi
+  tmux select-pane -t "$SESSION" -T "$2"
   tmux select-layout -t "$SESSION" tiled
 }
 
-pane "make logs"
-pane "make api"
-pane "make cons"
-pane "make conf"
-pane "make write"
-pane "make tx"
+i=1
+while [ $i -le 6 ]; do
+  pane "${CMDS[$i]}" "${TITLES[$i]}"
+  i=$((i + 1))
+done
+
+# Оформление tmux в общей стилистике L0: фокус на активной панели,
+# короткая строка состояния сессии.
+tmux set -t "$SESSION" status-style "bg=default,fg=colour244"
+tmux set -t "$SESSION" status-left "#[bold,fg=cyan]L0 #[default,fg=colour244]live-terminal "
+tmux set -t "$SESSION" status-right "#[fg=colour244]%H:%M #[fg=cyan]#S"
+tmux set -t "$SESSION" status-interval 5
+tmux set -t "$SESSION" pane-border-status top
+tmux set -t "$SESSION" pane-border-format " #{pane_title} "
+tmux set -t "$SESSION" pane-border-style "fg=colour238"
+tmux set -t "$SESSION" pane-active-border-style "fg=cyan"
+tmux set -t "$SESSION" window-status-current-style "fg=cyan,bold"
 
 tmux attach-session -t "$SESSION"

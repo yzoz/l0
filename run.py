@@ -5,6 +5,8 @@ import sys
 
 from watchfiles import Change, awatch
 
+from src.telemetry import metrics, start_dumper
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,8 @@ async def watch_and_run():
     service_type = args.service_type
 
     logger.info("Starting service '%s' with file watching on %s", service_type, WATCH_DIRS)
+    metrics.set_role(service_type)
+    dumper = start_dumper(service_type)
     service_task = asyncio.create_task(run_service(service_type))
 
     try:
@@ -66,8 +70,11 @@ async def watch_and_run():
                 await service_task
             except asyncio.CancelledError:
                 logger.info("Previous service instance cancelled")
+            # Локальные счётчики сбрасываются при перезапуске сервиса.
+            metrics.reset()
             service_task = asyncio.create_task(run_service(service_type))
     finally:
+        dumper.cancel()
         service_task.cancel()
         await asyncio.gather(service_task, return_exceptions=True)
 

@@ -13,6 +13,7 @@ from src.database.mongodb import MongoDB
 from src.database.queues import RabbitMQ
 from src.database.redis import Redis
 from src.models.tx import TxStore
+from src.telemetry import metrics
 from src.utils.data import hash_hex, ordered_sum
 from src.utils.profile import get_balance
 
@@ -35,12 +36,18 @@ class ConsumerProcessor:
             await self.process_transaction(tx, message)
         except json.JSONDecodeError:
             logger.error("Failed to parse message: Invalid JSON format")
+            metrics.inc("bad_format")
+            metrics.event("error", "format", "формат сообщения: невалидный JSON", key="format")
             await message.nack(requeue=False)
         except asyncio.TimeoutError:
             logger.error("Timeout during processing")
+            metrics.inc("error")
+            metrics.event("error", "timeout", "таймаут обработки", key="timeout")
             await message.nack(requeue=True)
         except Exception as e:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
+            metrics.inc("error")
+            metrics.event("error", "error", f"ошибка обработки: {type(e).__name__}", key=f"error:{type(e).__name__}")
             await message.nack(requeue=False)
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
@@ -53,21 +60,29 @@ class ConsumerProcessor:
     async def process_transaction(self, tx: TxStore, message: IncomingMessage) -> None:
         """Обрабатывает одну транзакцию"""
         tx_hash = hash_hex(ordered_sum(dict(tx)))
+        short = tx_hash[:8]
+        metrics.inc("received")
         async with self.redis.client.lock(f"consumer:{tx_hash}"):
             # Проверка дубликатов
             if await self.check_duplicate(tx):
                 logger.info(f"Duplicate transaction: {tx_hash}")
+                metrics.inc("dup")
+                metrics.event("warn", "dup", f"{short} дубликат", ref=tx_hash, key=f"dup:{tx_hash}")
                 await message.nack(requeue=False)
                 return
 
             # Проверка баланса
             if not await self.verify_balance(tx):
                 logger.info(f"Insufficient funds for {tx.credit}")
+                metrics.inc("no_funds")
+                metrics.event("warn", "funds", f"{short} недостаточно средств", ref=tx_hash, key=f"funds:{tx_hash}")
                 await message.nack(requeue=False)
                 return
 
             # Проверка наличия родителей
             if not await self.verify_parents(tx_hash, tx):
+                metrics.inc("no_parent")
+                metrics.event("warn", "parent", f"{short} нет родителя", ref=tx_hash, key=f"parent:{tx_hash}")
                 await message.nack(requeue=False)
                 return
 
@@ -78,6 +93,8 @@ class ConsumerProcessor:
 
             await message.ack()
             logger.info(f"Transaction {tx_hash} processed and added to graph")
+            metrics.inc("added")
+            metrics.event("ok", "added", f"{short} добавлена", ref=tx_hash, key=f"added:{tx_hash}")
 
     async def check_duplicate(self, tx: TxStore) -> bool:
         """Проверяет, существует ли уже такая транзакция в базе"""
@@ -162,12 +179,18 @@ class ConsumerProcessor:
                     cycle_count = (await result.single())["cycle_count"]
                     if cycle_count > 0:
                         logger.warning(f"Cycle detected for {tx_hash}")
+                        metrics.inc("cycle")
+                        metrics.event(
+                            "warn", "cycle", f"{tx_hash[:8]} цикл — узел удалён", ref=tx_hash, key=f"cycle:{tx_hash}"
+                        )
                         await session.run("MATCH (t:Transaction {hash: $hash}) DETACH DELETE t", hash=tx_hash)
                         return False
 
                     return True
                 except Neo4jError as e:
                     logger.error(f"Service error: {e}")
+                    metrics.inc("error")
+                    metrics.event("error", "graph", f"{tx_hash[:8]} ошибка графа: {type(e).__name__}", ref=tx_hash)
                     return False
 
 

@@ -10,6 +10,7 @@ from src.database.graph import Memgraph
 from src.database.mongodb import MongoDB
 from src.database.redis import Redis
 from src.models.tx import TxWrite
+from src.telemetry import metrics
 from src.utils.profile import get_balance
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,10 @@ class WriterProcessor:
             return True
         except Neo4jError as e:
             logger.error("Failed to delete graph node %s: %s", tx_hash, e)
+            metrics.inc("delete_errors")
+            metrics.event(
+                "error", "delete", f"{tx_hash[:8]} ошибка удаления узла", ref=tx_hash, key=f"delete:{tx_hash}"
+            )
             return False
 
     async def _confirm(self, session, tx_hash: str, data: dict) -> None:
@@ -51,11 +56,15 @@ class WriterProcessor:
             inserted = await self.db.insert_tx(tx)
         except DuplicateKeyError:
             logger.warning("Duplicate key error for hash: %s", tx.hash)
+            metrics.inc("dup")
+            metrics.event("warn", "dup", f"{tx.hash[:8]} дубликат записи", ref=tx.hash, key=f"dup:{tx.hash}")
             await self._delete_node(session, tx.hash)
             return
 
         if not inserted:
             logger.error("Failed to insert confirmed TX: %s", tx.hash)
+            metrics.inc("insert_errors")
+            metrics.event("error", "insert", f"{tx.hash[:8]} ошибка записи", ref=tx.hash, key=f"insert:{tx.hash}")
             return
         logger.info("Confirmed TX saved: %s", tx.hash)
 
@@ -70,15 +79,23 @@ class WriterProcessor:
             # Компенсация: откатываем источник истины, чтобы транзакция
             # не осталась подтверждённой без обновлённых балансов.
             logger.error("Redis pipeline failed for %s, rolling back Mongo: %s", tx.hash, e)
+            metrics.inc("redis_errors")
+            metrics.inc("compensation")
+            metrics.event(
+                "error", "compensate", f"{tx.hash[:8]} компенсация Mongo", ref=tx.hash, key=f"compensate:{tx.hash}"
+            )
             try:
                 await self.db.tx.delete_one({"hash": tx.hash})
             except Exception:
                 logger.error("Failed to roll back Mongo TX %s", tx.hash, exc_info=True)
+                metrics.inc("compensation_errors")
             return
 
         # 3. Memgraph — очистка узла из графа.
         # На этом шаге данные уже согласованы; при сбое узел останется в графе,
         # но из-за маркера confirmed_key повторно обработан не будет.
+        metrics.inc("confirmed")
+        metrics.event("ok", "confirm", f"{tx.hash[:8]} подтверждена", ref=tx.hash, key=f"confirm:{tx.hash}")
         await self._delete_node(session, tx.hash)
 
     async def check_pool(self):
@@ -95,6 +112,7 @@ class WriterProcessor:
                 threshold=CONFIRM_WEIGHT,
             )
             confirmed = [{"hash": record["t.hash"], "data": record["t.data"]} async for record in result]
+            metrics.set("above_threshold", len(confirmed))
 
             for t in confirmed:
                 confirmed_key = f"confirmed:{t['hash']}"
@@ -106,6 +124,14 @@ class WriterProcessor:
                     balance = await get_balance(tx.credit, self.db, self.redis)
                     if balance < tx.amount and "genesis" not in (tx.msg or ""):
                         # Недостаточно средств — транзакция не может быть подтверждена.
+                        metrics.inc("insufficient")
+                        metrics.event(
+                            "warn",
+                            "funds",
+                            f"{tx.hash[:8]} недостаточно средств",
+                            ref=tx.hash,
+                            key=f"funds:{tx.hash}",
+                        )
                         await self._delete_node(session, tx.hash)
                         continue
 

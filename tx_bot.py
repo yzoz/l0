@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import random
 import sys
 import time
@@ -10,6 +11,8 @@ from multiprocessing import Process
 import httpx
 
 from keys import pk, sk
+from src.console.style import fmt_ms
+from src.telemetry import metrics, start_dumper
 from src.utils.crypto import sign_message
 from src.utils.data import ordered_sum
 
@@ -18,6 +21,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(process)d - %(le
 logger = logging.getLogger(__name__)
 
 start = time.time()
+
+# Полные JSON и подписи — только в режиме подробного вывода.
+VERBOSE = os.environ.get("L0_VERBOSE") == "1"
 
 
 async def arange(count):
@@ -58,11 +64,34 @@ async def send(t, client):
             # Подпись транзакции
             s = sign_message(priv, m)
             tx_data = {"content": tx, "sign": s}
-            logger.info(f"Sending transaction: {json.dumps(tx_data, indent=2)}")
+            if VERBOSE:
+                logger.info(f"Sending transaction: {json.dumps(tx_data, indent=2)}")
             # r = await client.post('http://192.168.1.8:8000/send/', data=json.dumps(tx_data))
+            t0 = time.perf_counter()
             r = await client.post("http://localhost:8000/send/", data=json.dumps(tx_data))
-            logger.info(f"Response: {r.text}")
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            metrics.inc("sent")
+            metrics.observe("latency_ms", elapsed_ms)
+            short = u[:8]
+            if r.status_code < 400:
+                metrics.inc("ok")
+                metrics.event("ok", "send", f"{short} {r.status_code} {fmt_ms(elapsed_ms)}", ref=u, key=f"ok:{u}")
+            else:
+                metrics.inc("err")
+                metrics.event(
+                    "warn" if r.status_code < 500 else "error",
+                    "send",
+                    f"{short} {r.status_code} {fmt_ms(elapsed_ms)}",
+                    ref=u,
+                    key=f"err:{u}",
+                )
+            if VERBOSE:
+                logger.info(f"Response: {r.text}")
+            else:
+                logger.info("tx %s -> %s %s", short, r.status_code, fmt_ms(elapsed_ms))
         except Exception as e:
+            metrics.inc("err")
+            metrics.event("error", "send", f"{u[:8]} запрос не удался: {type(e).__name__}", ref=u, key=f"exc:{u}")
             logger.error(f"Error in send: {e}")
 
 
@@ -74,6 +103,11 @@ async def run_sender(t, c):
 
 def process_target(t, c):
     """Функция-цель для каждого процесса."""
+    metrics.set_role(f"tx-w{os.getpid()}")
+    metrics.set("coroutines", c)
+    metrics.set("param_t", t)
+    metrics.set("param_c", c)
+    dumper = start_dumper()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -81,7 +115,13 @@ def process_target(t, c):
     except KeyboardInterrupt:
         logger.info("Process interrupted")
     finally:
+        try:
+            metrics.dump()
+        except OSError:
+            pass
         loop.close()
+        if hasattr(dumper, "cancel"):
+            dumper.cancel()
 
 
 def main():
@@ -103,6 +143,14 @@ def main():
     """Основная функция для запуска многопроцессного генератора транзакций."""
     num_processes = n  # Количество процессов (можно настроить)
 
+    metrics.set_role("tx-main")
+    metrics.set("processes", num_processes)
+    metrics.set("coroutines", c)
+    metrics.set("param_t", t)
+    metrics.set("param_c", c)
+    metrics.set("param_n", n)
+    dumper = start_dumper()
+
     processes = []
     for _ in range(num_processes):
         p = Process(target=process_target, args=(t, c))
@@ -119,6 +167,13 @@ def main():
                 p.terminate()
                 p.join()
         sys.exit(0)
+    finally:
+        try:
+            metrics.dump()
+        except OSError:
+            pass
+        if hasattr(dumper, "cancel"):
+            dumper.cancel()
 
 
 if __name__ == "__main__":
