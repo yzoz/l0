@@ -59,7 +59,7 @@ txg = "tx_bot:main"
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-exclude = ["env", ".venv", "utils"]
+exclude = ["env", ".venv"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]

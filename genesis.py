@@ -1,33 +1,32 @@
 import asyncio
-from neo4j import AsyncGraphDatabase
+import logging
+import time
+
 import redis.asyncio as redis
+from neo4j import AsyncGraphDatabase
+from neo4j.exceptions import TransientError
+from pymongo import ASCENDING, IndexModel, MongoClient
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
 from src.models.tx import TxStore
 from src.utils.data import hash_hex, ordered_sum
-from pymongo import MongoClient, IndexModel, ASCENDING
-import time
-import logging
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from neo4j.exceptions import TransientError
-
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
 
 @retry(
     stop=stop_after_attempt(5),  # Максимум 3 попытки
     wait=wait_exponential(multiplier=1, min=0.1, max=2),  # Экспоненциальная задержка
     retry=retry_if_exception_type(TransientError),  # Повтор для TransientError
-    reraise=True  # Проброс оригинальной ошибки при неудаче
+    reraise=True,  # Проброс оригинальной ошибки при неудаче
 )
 async def main():
     # Инициализация подключений
     memgraph_driver = AsyncGraphDatabase.driver("bolt://localhost:7687")
     redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
-    mongo_client = MongoClient('localhost', 27017)
+    mongo_client = MongoClient("localhost", 27017)
     db = mongo_client.feo
     txs = db.tx
 
@@ -50,7 +49,7 @@ async def main():
             amount=500000000000000,
             uniq="",
             sign="",
-            msg="genesis"
+            msg="genesis",
         ),
         TxStore(
             parents=["0", "1"],
@@ -59,7 +58,7 @@ async def main():
             amount=330000000000000,
             uniq="",
             sign="",
-            msg="genesis2"
+            msg="genesis2",
         ),
         TxStore(
             parents=["0", "1"],
@@ -68,15 +67,15 @@ async def main():
             amount=250000000000000,
             uniq="",
             sign="",
-            msg="genesis3"
-        )
+            msg="genesis3",
+        ),
     ]
 
     try:
         async with memgraph_driver.session() as session:
             # Очистка Memgraph
             await session.run("MATCH (n) DETACH DELETE n")
-            #await session.run("DROP GRAPH") memgraph --storage-mode=IN_MEMORY_ANALYTICAL
+            # await session.run("DROP GRAPH") memgraph --storage-mode=IN_MEMORY_ANALYTICAL
             logger.info("Memgraph cleared")
 
             # Добавление генезис-транзакций
@@ -97,13 +96,13 @@ async def main():
                     })
                     """,
                     hash=tx_hash,
-                    data=tx_dict
+                    data=tx_dict,
                 )
 
                 # Установка баланса в Redis
                 await redis_client.set(f"balance:{tx.debit}", tx.amount)
                 logger.info(f"Created transaction {tx_hash} with balance {tx.amount} for {tx.debit}")
-            
+
             await session.run("CREATE CONSTRAINT ON (t:Transaction) ASSERT t.hash IS UNIQUE")
             await session.run("CREATE INDEX ON :Transaction(hash)")
 
@@ -123,6 +122,7 @@ async def main():
         await redis_client.aclose()
         mongo_client.close()
         logger.info("All connections closed")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

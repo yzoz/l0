@@ -1,22 +1,20 @@
-from pymongo import MongoClient
-import networkx as nx
-from pyvis.network import Network
 import json
 import pprint
+
+import networkx as nx
+from pymongo import MongoClient
+from pyvis.network import Network
+
 pp = pprint.PrettyPrinter(depth=4)
 
 
-cli = MongoClient('localhost', 27017)
+cli = MongoClient("localhost", 27017)
 db = cli.feo
 tx = db.tx
 
 # Новый pipeline с массивом parents
 pipeline = [
-    {
-        "$match": {
-            "msg": "genesis"
-        }
-    },
+    {"$match": {"msg": "genesis"}},
     {
         "$graphLookup": {
             "from": "tx",
@@ -25,14 +23,14 @@ pipeline = [
             "connectToField": "parents",  # Ищем в массиве parents
             "as": "descendants",
             "depthField": "level",
-            "maxDepth": 100
+            "maxDepth": 100,
         }
-    }
+    },
 ]
 
 # Получение данных
 result = list(tx.aggregate(pipeline))[0]
-#pp.pprint(result)
+# pp.pprint(result)
 print(f"Найдено потомков: {len(result.get('descendants', []))}")
 
 G = nx.DiGraph()
@@ -71,9 +69,19 @@ for node in net.nodes:
     readable_label = f"{short_credit} ({amount if amount is not None else 'N/A'})"
     node["title"] = f"Hash: {full_hash}<br>Amount: {amount if amount is not None else 'N/A'}<br>Level: {level}"
     node["label"] = readable_label
-    #node["size"] = max(10, min(amount / 10, 30)) if amount is not None else 10
-    node["color"] = ["#97c2fc", "#ffb6c1", "#98fb98", "#dda0dd", "#f08080", "#20b2aa", 
-                     "#ffdead", "#87cefa", "#ff69b4", "#9acd32"][level % 10]
+    # node["size"] = max(10, min(amount / 10, 30)) if amount is not None else 10
+    node["color"] = [
+        "#97c2fc",
+        "#ffb6c1",
+        "#98fb98",
+        "#dda0dd",
+        "#f08080",
+        "#20b2aa",
+        "#ffdead",
+        "#87cefa",
+        "#ff69b4",
+        "#9acd32",
+    ][level % 10]
 
 # Настройки графа
 options = {
@@ -83,19 +91,12 @@ options = {
             "levelSeparation": 200,
             "nodeSpacing": 120,
             "direction": "UD",
-            "sortMethod": "directed"
+            "sortMethod": "directed",
         }
     },
-    "physics": {
-        "enabled": False
-    },
-    "edges": {
-        "arrows": "to",
-        "smooth": {"type": "continuous"}
-    },
-    "nodes": {
-        "font": {"size": 12}
-    }
+    "physics": {"enabled": False},
+    "edges": {"arrows": "to", "smooth": {"type": "continuous"}},
+    "nodes": {"font": {"size": 12}},
 }
 
 net.set_options(json.dumps(options))

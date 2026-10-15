@@ -1,7 +1,9 @@
 import logging
-from aio_pika import connect_robust, Message, DeliveryMode
+
+from aio_pika import DeliveryMode, Message, connect_robust
 
 logger = logging.getLogger(__name__)
+
 
 class RabbitMQ:
     def __init__(self):
@@ -10,9 +12,9 @@ class RabbitMQ:
 
     async def connect(self):
         """Инициализация подключения к RabbitMQ с dead-letter очередью."""
-        self.connection = await connect_robust(f"amqp://guest:guest@localhost/")
+        self.connection = await connect_robust("amqp://guest:guest@localhost/")
         self.channel = await self.connection.channel()
-        #await self.rabbitmq.channel.set_qos(prefetch_count=1)
+        # await self.rabbitmq.channel.set_qos(prefetch_count=1)
         """try: # Создание dead-letter очереди
             await self.channel.declare_queue(
                 "dead-letter",
@@ -25,10 +27,9 @@ class RabbitMQ:
     async def publish_message(self, queue_name, message: str):
         """Публикация сообщения в очередь."""
         await self.channel.default_exchange.publish(
-            Message(message.encode("utf-8"), delivery_mode=DeliveryMode.PERSISTENT),
-            routing_key=queue_name
+            Message(message.encode("utf-8"), delivery_mode=DeliveryMode.PERSISTENT), routing_key=queue_name
         )
-    
+
     async def consume_messages(self, queue_name: str, callback: callable, stop_event=None):
         """Потребление сообщений из очереди."""
         queue = await self.channel.declare_queue(queue_name, durable=True)

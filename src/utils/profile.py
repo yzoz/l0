@@ -1,7 +1,9 @@
+import asyncio
+
+from src.config import BALANCE_TIMEOUT
 from src.database.mongodb import MongoDB
 from src.database.redis import Redis
-from src.config import BALANCE_TIMEOUT
-import asyncio
+
 
 async def get_balance_sync(addr: str, db: MongoDB):
     """Считает баланс адреса напрямую по коллекции подтверждённых транзакций.
@@ -11,23 +13,26 @@ async def get_balance_sync(addr: str, db: MongoDB):
     ``debit``, а расход — где он ``credit``.
     """
     pipeline = [
-        {"$facet": {
-            "income": [
-                {"$match": {"debit": addr}},  # Входящие транзакции (где адрес получатель)
-                {"$group": {"_id": None, "sum": {"$sum": "$amount"}}}
-            ],
-            "outcome": [
-                {"$match": {"credit": addr}},  # Исходящие транзакции (где адрес отправитель)
-                {"$group": {"_id": None, "sum": {"$sum": "$amount"}}}
-            ]
-        }}
+        {
+            "$facet": {
+                "income": [
+                    {"$match": {"debit": addr}},  # Входящие транзакции (где адрес получатель)
+                    {"$group": {"_id": None, "sum": {"$sum": "$amount"}}},
+                ],
+                "outcome": [
+                    {"$match": {"credit": addr}},  # Исходящие транзакции (где адрес отправитель)
+                    {"$group": {"_id": None, "sum": {"$sum": "$amount"}}},
+                ],
+            }
+        }
     ]
     result = await db.aggregate(pipeline)
     income = result[0]["income"][0]["sum"] if result[0]["income"] else 0
     outcome = result[0]["outcome"][0]["sum"] if result[0]["outcome"] else 0
     return income - outcome
 
-async def get_balance(addr: str, db: MongoDB, redis: Redis, sync = False) -> int:
+
+async def get_balance(addr: str, db: MongoDB, redis: Redis, sync=False) -> int:
     """Возвращает баланс адреса, по возможности из кэша Redis.
 
     ``credit`` — плательщик, ``debit`` — получатель (см. ``get_balance_sync``).
