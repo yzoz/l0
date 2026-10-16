@@ -3,7 +3,7 @@ import asyncio
 import logging
 import sys
 
-from watchfiles import Change, awatch
+from watchfiles import Change, awatch, PythonFilter
 
 from src.telemetry import metrics, start_dumper
 
@@ -74,7 +74,7 @@ async def watch_and_run():
 
     try:
         try:
-            async for changes in awatch(*WATCH_DIRS):
+            async for changes in awatch(*WATCH_DIRS, watch_filter=PythonFilter()):
                 py_changes = [(change, path) for change, path in changes if path.endswith(".py")]
                 if not py_changes:
                     continue
