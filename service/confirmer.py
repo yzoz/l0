@@ -67,15 +67,14 @@ class ConfirmationProcessor:
                             f"""//cypher
                             MATCH path=(t:Transaction {{hash: $hash}})-[:CONFIRMS*1..{MAX_DEPTH}]->(descendant)
                             WITH length(path) as depth, descendant
-                            WITH depth, descendant.own_weight as own_weight,
+                            WITH depth, descendant.weight as weight,
                                 {self.damping_case} as damping_factor
-                            RETURN sum(damping_factor * own_weight) as indirect_weight
+                            RETURN sum(damping_factor * (weight + 1.0)) as indirect_weight
                             """,
                             hash=node,
                         )
                         record = await result.single()
-                        indirect_weight = record["indirect_weight"] if record else 0.0
-                        total_weight = 1.0 + indirect_weight  # own_weight + indirect_weight
+                        total_weight = record["indirect_weight"] if record else 0.0
 
                         # Обновление веса узла
                         await session.run(
@@ -138,7 +137,7 @@ class ConfirmationProcessor:
     async def periodic_check_pool(self, stop_event=None):
         while not (stop_event and stop_event.is_set()):
             await self.check_pool()
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
 
 
 class ConfirmationService:

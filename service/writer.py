@@ -5,7 +5,7 @@ import os
 from neo4j.exceptions import Neo4jError
 from pymongo.errors import DuplicateKeyError
 
-from src.config import CONFIRM_WEIGHT, CONFIRMED_TTL
+from src.config import CONFIRMED_TTL, POOL_SIZES, PARENTS
 from src.database.graph import Memgraph
 from src.database.mongodb import MongoDB
 from src.database.redis import Redis
@@ -13,11 +13,13 @@ from src.models.tx import TxWrite
 from src.telemetry import metrics
 from src.utils.profile import get_balance
 
+
+
 logger = logging.getLogger(__name__)
 
 # Сентинелы генезиса: у стартовых минтов parents=["0","1"] — это корни DAG,
 # их нет ни в Mongo, ни в графе, но они всегда считаются подтверждёнными.
-GENESIS_PARENTS = frozenset({"0", "1"})
+GENESIS_PARENTS = frozenset({"0", "1", "2"})
 
 
 def _is_mint(tx: TxWrite) -> bool:
@@ -196,70 +198,77 @@ class WriterProcessor:
         await self._delete_node(session, tx.hash)
 
     async def check_pool(self):
+        
         """Проверяет пул неподтверждённых транзакций и подтверждает те, что превышают порог"""
         async with self.dag.driver.session() as session:
+            result = await session.run("MATCH (t:Transaction) RETURN count(t) AS total")
+            record = await result.single()
+            num_txs = record["total"]
+            CONFIRM_WEIGHT = POOL_SIZES[0][1]
+            for threshold, w, _ in POOL_SIZES:
+                if num_txs > threshold:
+                    CONFIRM_WEIGHT = w
             # Получение транзакций с весом >= порога
             result = await session.run(
                 """
                 MATCH (t:Transaction)
                 WHERE t.weight >= $threshold
                 RETURN t.hash, t.data
-                ORDER BY rand() LIMIT 100
                 """,
                 threshold=CONFIRM_WEIGHT,
             )
             confirmed = [{"hash": record["t.hash"], "data": record["t.data"]} async for record in result]
             metrics.set("above_threshold", len(confirmed))
-
-            for t in confirmed:
-                confirmed_key = f"confirmed:{t['hash']}"
-                async with self.redis.client.lock(f"writer:{t['hash']}"):
-                    if await self.redis.client.exists(confirmed_key):
-                        continue
-
-                    tx = self.create_tx(t["hash"], t["data"])
-
-                    # Целостность цепочки: подтверждать можно только тех, чьи
-                    # родители уже в реестре. Раньше — ждём, мертвы — каскад.
-                    parents_state = await self._parents_state(session, tx)
-                    if parents_state == "dead":
-                        metrics.inc("parent_dead")
-                        metrics.event(
-                            "warn",
-                            "parent-dead",
-                            f"{t['hash'][:8]} мёртвый родитель — каскадное удаление",
-                            ref=t["hash"],
-                            key=f"parent-dead:{t['hash']}",
-                        )
-                        await self._kill_subtree(session, t["hash"])
-                        continue
-                    if parents_state == "pending":
-                        # Родитель ещё в пуле: ждём его подтверждения
-                        # бесконечно — маркер deferred без TTL.
-                        await self.redis.client.set(f"deferred:{t['hash']}", 1)
-                        metrics.inc("deferred")
-                        continue
-                    # Родители подтверждены — пометка ожидания больше не нужна.
-                    await self.redis.client.delete(f"deferred:{t['hash']}")
-
-                    # У минта нет плательщика: проверка баланса его только ложно
-                    # отсекает (пустой credit даёт баланс 0), поэтому пропускаем.
-                    if not _is_mint(tx):
-                        balance = await get_balance(tx.credit, self.db, self.redis)
-                        if balance < tx.amount:
-                            # Недостаточно средств — транзакция не может быть подтверждена.
-                            metrics.inc("insufficient")
-                            metrics.event(
-                                "warn",
-                                "funds",
-                                f"{tx.hash[:8]} недостаточно средств",
-                                ref=tx.hash,
-                                key=f"funds:{tx.hash}",
-                            )
-                            await self._kill_subtree(session, tx.hash)
+            if not num_txs <= PARENTS:
+                for t in confirmed:
+                    confirmed_key = f"confirmed:{t['hash']}"
+                    async with self.redis.client.lock(f"writer:{t['hash']}"):
+                        if await self.redis.client.exists(confirmed_key):
                             continue
 
-                    await self._confirm(session, t["hash"], t["data"])
+                        tx = self.create_tx(t["hash"], t["data"])
+
+                        # Целостность цепочки: подтверждать можно только тех, чьи
+                        # родители уже в реестре. Раньше — ждём, мертвы — каскад.
+                        parents_state = await self._parents_state(session, tx)
+                        if parents_state == "dead":
+                            metrics.inc("parent_dead")
+                            metrics.event(
+                                "warn",
+                                "parent-dead",
+                                f"{t['hash'][:8]} мёртвый родитель — каскадное удаление",
+                                ref=t["hash"],
+                                key=f"parent-dead:{t['hash']}",
+                            )
+                            await self._kill_subtree(session, t["hash"])
+                            continue
+                        if parents_state == "pending":
+                            # Родитель ещё в пуле: ждём его подтверждения
+                            # бесконечно — маркер deferred без TTL.
+                            await self.redis.client.set(f"deferred:{t['hash']}", 1)
+                            metrics.inc("deferred")
+                            continue
+                        # Родители подтверждены — пометка ожидания больше не нужна.
+                        await self.redis.client.delete(f"deferred:{t['hash']}")
+
+                        # У минта нет плательщика: проверка баланса его только ложно
+                        # отсекает (пустой credit даёт баланс 0), поэтому пропускаем.
+                        if not _is_mint(tx):
+                            balance = await get_balance(tx.credit, self.db, self.redis)
+                            if balance < tx.amount:
+                                # Недостаточно средств — транзакция не может быть подтверждена.
+                                metrics.inc("insufficient")
+                                metrics.event(
+                                    "warn",
+                                    "funds",
+                                    f"{tx.hash[:8]} недостаточно средств",
+                                    ref=tx.hash,
+                                    key=f"funds:{tx.hash}",
+                                )
+                                await self._kill_subtree(session, tx.hash)
+                                continue
+
+                        await self._confirm(session, t["hash"], t["data"])
 
     def create_tx(self, hash: str, data: dict) -> TxWrite:
         tx_dict = dict(data)

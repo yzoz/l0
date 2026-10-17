@@ -45,7 +45,7 @@ async def main():
     # Определение генезис-транзакций
     genesis_txs = [
         TxStore(
-            parents=["0", "1"],
+            parents=["0", "1", "2"],
             debit="9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",
             credit="",
             amount=500000000000000,
@@ -54,7 +54,7 @@ async def main():
             msg="genesis",
         ),
         TxStore(
-            parents=["0", "1"],
+            parents=["0", "1", "2"],
             debit="RvCcJWKYpoEXGm6N72kDj3dA8zTxGTMSBpCLSKcJvdR",
             credit="",
             amount=330000000000000,
@@ -63,7 +63,7 @@ async def main():
             msg="genesis2",
         ),
         TxStore(
-            parents=["0", "1"],
+            parents=["0", "1", "2"],
             debit="2RAHCZg7SfyLY6x5uLmtDh1tNbZr4w5NTPMWXpHrqdyc",
             credit="",
             amount=250000000000000,
@@ -92,8 +92,7 @@ async def main():
                     """
                     CREATE (t:Transaction {
                         hash: $hash,
-                        own_weight: 1.0,
-                        weight: 1.0,
+                        weight: 0.0,
                         data: $data
                     })
                     """,

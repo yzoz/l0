@@ -15,6 +15,7 @@ from src.console.style import fmt_ms
 from src.telemetry import metrics, start_dumper
 from src.utils.crypto import sign_message
 from src.utils.data import ordered_sum
+from src.config import DEV_ADDR
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(process)d - %(levelname)s - %(message)s")
@@ -45,11 +46,16 @@ async def arange(count):
 async def send(t, client):
     # await asyncio.sleep(random.randint(0, 30))
     """Отправка случайных транзакций в асинхронном режиме."""
-    async for _ in arange(int(t)):
+    async for j in arange(int(t)):
         n = len(sk) - 1
         i = random.randint(0, n)
-        c = pk[i]  # credit (отправитель)
-        priv = sk[i]  # приватный ключ
+        if j % 3:
+            r = random.choice([29, 28, 27])
+            c = pk[r]
+            priv = sk[r]
+        else:
+            c = pk[i]  # credit (отправитель)
+            priv = sk[i]  # приватный ключ
         d = pk[random.randint(0, n)]  # debit (получатель)
         a = random.randint(1, 1000000000)  # сумма
         u = str(uuid.uuid4())  # уникальный идентификатор
@@ -130,7 +136,7 @@ def main():
     try:
         t = int(args[0])
     except IndexError:
-        t = 1000
+        t = 1_000_000
     try:
         c = int(args[1])
     except IndexError:

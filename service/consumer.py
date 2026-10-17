@@ -182,8 +182,7 @@ class ConsumerProcessor:
                         """
                         CREATE (t:Transaction {
                             hash: $hash,
-                            own_weight: 1.0,
-                            weight: 1.0,
+                            weight: 0.0,
                             data: $data
                         })
                         """,
