@@ -25,7 +25,7 @@ def tx_store():
         debit="EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU2",
         amount=100,
         uniq="tx123",
-        parents=["parent1", "parent2"],
+        parents=["parent1", "parent2", "parent3"],
         msg="test",
         sign="signature",
     )
@@ -173,6 +173,7 @@ async def test_add_to_graph_cycle_detected(processor, tx_store):
 @pytest.mark.asyncio
 async def test_process_transaction_duplicate(processor, message, tx_store):
     """Тест обработки транзакции с дубликатом"""
+    processor._fetch_graph_data = AsyncMock(return_value=None)
     processor.check_duplicate = AsyncMock(return_value=True)
     await processor.process_transaction(tx_store, message)
     message.nack.assert_called_once_with(requeue=False)
@@ -182,6 +183,7 @@ async def test_process_transaction_duplicate(processor, message, tx_store):
 @pytest.mark.asyncio
 async def test_process_transaction_insufficient_balance(processor, message, tx_store):
     """Тест обработки транзакции с недостаточным балансом"""
+    processor._fetch_graph_data = AsyncMock(return_value=None)
     processor.check_duplicate = AsyncMock(return_value=False)
     processor.verify_balance = AsyncMock(return_value=False)
     await processor.process_transaction(tx_store, message)
@@ -192,6 +194,7 @@ async def test_process_transaction_insufficient_balance(processor, message, tx_s
 @pytest.mark.asyncio
 async def test_process_transaction_missing_parents(processor, message, tx_store):
     """Тест обработки транзакции с отсутствующими родителями"""
+    processor._fetch_graph_data = AsyncMock(return_value=None)
     processor.check_duplicate = AsyncMock(return_value=False)
     processor.verify_balance = AsyncMock(return_value=True)
     processor.verify_parents = AsyncMock(return_value=False)
@@ -202,14 +205,74 @@ async def test_process_transaction_missing_parents(processor, message, tx_store)
 
 @pytest.mark.asyncio
 async def test_process_transaction_success(processor, message, tx_store):
-    """Тест успешной обработки транзакции"""
+    """Тест успешной обработки транзакции: запись в граф → mid → ack"""
+    processor._fetch_graph_data = AsyncMock(return_value=None)
     processor.check_duplicate = AsyncMock(return_value=False)
     processor.verify_balance = AsyncMock(return_value=True)
     processor.verify_parents = AsyncMock(return_value=True)
     processor.add_to_graph = AsyncMock(return_value=True)
+    processor._publish_mid = AsyncMock(return_value=True)
     await processor.process_transaction(tx_store, message)
     message.ack.assert_called_once()
     message.nack.assert_not_called()
+    # mid публикуется ДО ack — это гарантия no-loss при сбое публикации.
+    processor._publish_mid.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_process_transaction_mid_publish_failure_requeues(processor, message, tx_store):
+    """Сбой публикации mid: сообщение НЕ подтверждается, возвращается в очередь.
+
+    Узел уже записан в граф — uniq-резерв остаётся guard'ом от повторной вставки.
+    """
+    processor._fetch_graph_data = AsyncMock(return_value=None)
+    processor.check_duplicate = AsyncMock(return_value=False)
+    processor.verify_balance = AsyncMock(return_value=True)
+    processor.verify_parents = AsyncMock(return_value=True)
+    processor.add_to_graph = AsyncMock(return_value=True)
+    processor._publish_mid = AsyncMock(return_value=False)
+    processor.release_uniq = AsyncMock()
+    await processor.process_transaction(tx_store, message)
+    message.nack.assert_called_once_with(requeue=True)
+    message.ack.assert_not_called()
+    # Узел записан — резерв uniq снимать НЕЛЬЗЯ.
+    processor.release_uniq.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_transaction_retry_after_insert(processor, message, tx_store):
+    """Recovery-путь: транзакция уже в графе — перепубликуем mid и ack, без второго узла."""
+    existing = dict(tx_store, time=12345)
+    processor._fetch_graph_data = AsyncMock(return_value=existing)
+    processor._retry_inserted = AsyncMock()
+    await processor.process_transaction(tx_store, message)
+    processor._retry_inserted.assert_called_once()
+    message.ack.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retry_inserted_mismatch_goes_to_dlq(processor, message, tx_store):
+    """Конфликт данных при recovery: хэш совпал, но данные не те — в DLQ, второй узел не создаём."""
+    existing = dict(tx_store, time=12345)
+    existing["amount"] = 999  # расхождение данных при том же хэше
+    processor._reject = AsyncMock()
+    await processor._retry_inserted("a" * 128, tx_store, existing, message)
+    processor._reject.assert_called_once()
+    message.ack.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retry_inserted_success(processor, message, tx_store):
+    """Recovery: данные совпали, рёбра целы, mid перепубликован — ack без дубля узла."""
+    existing = dict(tx_store, time=12345)
+    processor._ensure_edges = AsyncMock(return_value=True)
+    processor._publish_mid = AsyncMock(return_value=True)
+    processor.add_to_graph = AsyncMock()
+    await processor._retry_inserted("a" * 128, tx_store, existing, message)
+    message.ack.assert_called_once()
+    message.nack.assert_not_called()
+    # Новый узел не создаётся.
+    processor.add_to_graph.assert_not_called()
 
 
 # Тесты для ConsumerService

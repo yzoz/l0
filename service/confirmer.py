@@ -1,171 +1,263 @@
-import asyncio
+"""Confirmer — вторая ступень пайплайна.
+
+LIFECYCLE ТРАНЗАКЦИИ (см. .docs/TODO_003.md):
+
+    consumer --mid(plain-text tx_hash)--> confirmer --out(tx_hash кандидата)--> writer
+
+Confirmer обрабатывает СОБЫТИЯ, а не сканирует пул. На каждое событие mid
+(новая транзакция, записанная в граф) пересчитывается score только ТРЁХ
+родителей этой транзакции — новые данные (новый прямой ребёнок) меняют score
+именно родителей.
+
+ФОРМУЛА SCORE (транзакции t):
+
+    score(t) = transfer_score(amount(t), alpha, beta)
+             + SUM( transfer_score(amount(child), alpha, beta) / 3 )
+      по прямым детям t (ребра CONFIRMS), включая подтверждённые и удалённые
+      из графа — их вклад считается по данным из Mongo/Redis, если узел ещё в графе.
+
+* Вклад каждого ребёнка делится на фиксированную константу 3 — число родителей
+  транзакции (PARENTS=3). НЕ на config-значение, а на литерал 3.
+* Внуки и более дальние потомки НЕ участвуют: никакого затухания по глубине.
+* Порог: score >= 1.0.
+* Score НИГДЕ не сохраняется: ни в графе, ни в Redis, ни в Mongo. Он всегда
+  пересчитывается из актуального состояния графа.
+* Собственная оценка новой транзакции не требуется: transfer_score по формуле
+  всегда < 1 (стремится к 1 при x → ∞), поэтому транзакция без детей не может
+  пройти порог. Оцениваются только родители.
+
+ДЕДУПЛИКАЦИЯ OUT: публикация кандидата идёт через enqueue_candidate, который
+ставит Redis-маркер ``queued:{hash}`` (SET NX + аренда). Повторные события для
+одного родителя не создают дублей в очереди out.
+"""
+
 import logging
-import os
-import time
+import re
 
-from neo4j.exceptions import Neo4jError, TransientError
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from aio_pika import IncomingMessage
 
-from src.config import CONFIRM_WEIGHT, DAMPING, MAX_DEPTH
+from src.config import MID_QUEUE
 from src.database.graph import Memgraph
-from src.database.queues import RabbitMQ
+from src.database.queues import PublishError, RabbitMQ, enqueue_candidate
 from src.database.redis import Redis
 from src.telemetry import metrics
+from src.utils.fn import alpha, beta, transfer_score
 
 logger = logging.getLogger(__name__)
 
-# Корзины распределения весов обработанной выборки [lo, hi).
-WEIGHT_BUCKETS = ((0, 1), (1, 2), (2, 3), (3, 5), (5, 10), (10, None))
-CYCLE_HISTORY = 30
+# Порог прохождения кандидата: score >= SCORE_THRESHOLD уходит в очередь out.
+SCORE_THRESHOLD = 1.0
+
+# Фиксированное число родителей транзакции. Вклад каждого прямого ребёнка в
+# score родителя делится ровно на 3. Связано с PARENTS=3 в src/config.py.
+CHILD_DIVISOR = 3
+
+# tx_hash — 128 hex-символов sha512 (см. src/utils/data.py).
+_HASH_RE = re.compile(r"^[0-9a-f]{128}$")
 
 
-def _damping_case(max_depth: int, damping: float) -> str:
-    """Строит Cypher-выражение CASE для коэффициентов затухания по глубине."""
-    branches = "\n".join(f"WHEN {depth} THEN {damping**depth}" for depth in range(1, max_depth + 1))
-    return f"""CASE depth
-        {branches}
-            ELSE 0.0
-        END"""
+def candidate_score(parent_amount: float, children_amounts: list[float]) -> float:
+    """Score родителя: его собственный transfer_score плюс вклад прямых детей.
+
+    score = transfer_score(parent.amount)
+          + SUM( transfer_score(child.amount) / CHILD_DIVISOR )
+
+    Прямые дети — только непосредственные потомки по ребрам CONFIRMS. Больше
+    ни один уровень глубины не учитывается.
+    """
+    score = transfer_score(parent_amount, alpha, beta)
+    for amount in children_amounts:
+        score += transfer_score(amount, alpha, beta) / CHILD_DIVISOR
+    return score
 
 
 class ConfirmationProcessor:
-    def __init__(self, redis: Redis, dag: Memgraph):
-        self.dag = dag
+    """Обработка событий mid: пересчёт score родителей и публикация кандидатов в out."""
+
+    def __init__(self, redis: Redis, dag: Memgraph, rabbit: RabbitMQ):
         self.redis = redis
-        self.damping_case = _damping_case(MAX_DEPTH, DAMPING)
-        metrics.set("confirm_weight", CONFIRM_WEIGHT)
-        metrics.set("max_depth", MAX_DEPTH)
-        metrics.set("damping", DAMPING)
+        self.dag = dag
+        self.rabbit = rabbit
 
-    @retry(
-        stop=stop_after_attempt(5),  # Максимум 5 попыток
-        wait=wait_exponential(multiplier=1, min=0.1, max=2),  # Экспоненциальная задержка
-        retry=retry_if_exception_type(TransientError),  # Повтор для TransientError
-        reraise=True,  # Проброс оригинальной ошибки при неудаче
-    )
-    async def check_pool(self):
-        """Пересчитывает веса выборки транзакций в графе Memgraph (не полный обход)."""
-        cycle_started = time.time()
-        processed = 0
-        errors = 0
-        weights: list[float] = []
-        # Получение потомков и глубины путей
-        async with self.dag.driver.session() as session:
-            # Получение всех узлов (только число — без полного обхода данных)
-            result = await session.run("MATCH (t:Transaction) RETURN count(t) AS total")
-            record = await result.single()
-            logger.info("Nodes: %s", record["total"])
-            metrics.set("nodes_total", record["total"])
-            result = await session.run("MATCH (t:Transaction) RETURN t.hash ORDER BY rand() LIMIT 100")
-            nodes = [record["t.hash"] async for record in result]
-            metrics.set("sample_size", len(nodes))
-            # Пересчёт весов
-            for node in nodes:
-                try:
-                    async with self.redis.client.lock(f"dag:{node}"):
-                        result = await session.run(
-                            f"""//cypher
-                            MATCH path=(t:Transaction {{hash: $hash}})-[:CONFIRMS*1..{MAX_DEPTH}]->(descendant)
-                            WITH length(path) as depth, descendant
-                            WITH depth, descendant.weight as weight,
-                                {self.damping_case} as damping_factor
-                            RETURN sum(damping_factor * (weight + 1.0)) as indirect_weight
-                            """,
-                            hash=node,
-                        )
-                        record = await result.single()
-                        total_weight = record["indirect_weight"] if record else 0.0
+    # ------------------------------------------------------------------
+    # Обработка события mid
+    # ------------------------------------------------------------------
 
-                        # Обновление веса узла
-                        await session.run(
-                            """
-                            MATCH (t:Transaction {hash: $hash})
-                            SET t.weight = $weight
-                            """,
-                            hash=node,
-                            weight=total_weight,
-                        )
-                        processed += 1
-                        weights.append(total_weight)
-                except (Neo4jError, OSError) as e:
-                    logger.error("Failed to recalculate weight for %s: %s", node, e)
-                    errors += 1
-                    metrics.event("error", "weight", f"{node[:8]} вес не пересчитан", ref=node, key=f"weight:{node}")
+    async def process_event(self, message: IncomingMessage) -> None:
+        """Обрабатывает одно событие mid (plain-text tx_hash новой транзакции).
 
-        self._record_cycle(len(nodes), processed, errors, weights, cycle_started)
+        Ack/nack:
+          * ack — событие обработано (включая случай, когда транзакция уже
+            удалена из графа как подтверждённая — тогда пропускаем);
+          * nack(requeue=True) — временные ошибки графа/очередей, событие
+            вернётся и будет обработано повторно;
+          * DLQ — повреждённое сообщение (не tx_hash).
+        """
+        tx_hash = message.body.decode("utf-8").strip()
+        # Валидация формата: событие — строго plain-text tx_hash без JSON.
+        if not _HASH_RE.match(tx_hash):
+            logger.error(f"Invalid mid payload: {tx_hash[:64]!r}")
+            metrics.inc("bad_format")
+            await self.rabbit.publish_to_dlq(message, "bad-mid-payload")
+            await message.nack(requeue=False)
+            return
 
-    def _record_cycle(
-        self, sample: int, processed: int, errors: int, weights: list[float], cycle_started: float
-    ) -> None:
-        """Фиксирует телеметрию одного цикла (только обработанная выборка)."""
-        now = time.time()
-        cycle_ms = (now - cycle_started) * 1000
-        metrics.inc("cycles")
-        metrics.inc("processed", processed)
-        metrics.inc("errors", errors)
-        metrics.set("cycle_ms", cycle_ms)
-        metrics.set("last_cycle_at", now)
-        metrics.set("last_sample", sample)
-        metrics.set("last_processed", processed)
-        metrics.set("last_errors", errors)
+        try:
+            await self._process_hash(tx_hash)
+        except PublishError as e:
+            # Временная ошибка публикации out (в т.ч. занятость queued-маркера
+            # сверх бюджета). Событие не теряем — requeue.
+            logger.warning(f"Publish error on {tx_hash[:8]}: {e}")
+            metrics.inc("errors")
+            await message.nack(requeue=True)
+            return
+        except Exception as e:
+            logger.error(f"Unexpected confirmer error for {tx_hash[:8]}: {e}", exc_info=True)
+            metrics.inc("errors")
+            metrics.event("error", "conf", f"{tx_hash[:8]} ошибка confirmer: {type(e).__name__}", ref=tx_hash)
+            await self.rabbit.publish_to_dlq(message, f"confirmer:{type(e).__name__}")
+            await message.nack(requeue=False)
+            return
 
-        if weights:
-            metrics.set("weights_min", min(weights))
-            metrics.set("weights_avg", sum(weights) / len(weights))
-            metrics.set("weights_max", max(weights))
-            buckets = []
-            for lo, hi in WEIGHT_BUCKETS:
-                count = sum(1 for w in weights if lo <= w < (hi if hi is not None else float("inf")))
-                buckets.append([lo, hi, count])
-            metrics.set("weight_buckets", buckets)
+        await message.ack()
+
+    async def _process_hash(self, tx_hash: str) -> None:
+        """Пересчитывает score родителей транзакции ``tx_hash``.
+
+        Memgraph — источник истины: по хэшу читаем транзакцию, её родителей и
+        непосредственных детей каждого родителя. Ничего не пишем в хранилища.
+        """
+        metrics.inc("events")
+
+        # Загружаем транзакцию. Если узла нет — транзакция уже подтверждена и
+        # удалена writer'ом из графа; событие устарело, просто пропускаем.
+        data = await self._fetch_tx_data(tx_hash)
+        if data is None:
+            logger.debug(f"mid for {tx_hash[:8]}: tx not in graph, skip")
+            metrics.inc("not_found")
+            return
+
+        parents = data.get("parents") or []
+        # У транзакции всегда PARENTS (=3) родителя, но защищаемся от пустых данных.
+        for parent_hash in parents:
+            await self._score_parent(parent_hash)
+
+    async def _score_parent(self, parent_hash: str) -> None:
+        """Считает score одного родителя и при необходимости ставит его в out.
+
+        Один вызов = одна пересчёт от актуального состояния графа. При
+        параллельных событиях mid возможны конкурентные пересчёты одного
+        родителя: это допустимо, очередь out дедуплицируется queued-маркером,
+        а повторная обработка кандидата в writer'е идемпотентна.
+        """
+        row = await self._fetch_parent_with_children(parent_hash)
+        if row is None:
+            # Родитель уже подтверждён/удалён из графа — считать нечего.
+            logger.debug(f"parent {parent_hash[:8]} not in graph, skip")
+            metrics.inc("not_found")
+            return
+
+        parent_data, children_data = row
+        parent_amount = parent_data.get("amount")
+        children_amounts = [c.get("amount") for c in children_data if c and c.get("amount") is not None]
+        if parent_amount is None:
+            logger.warning(f"parent {parent_hash[:8]} has no amount, skip")
+            return
+
+        score = candidate_score(parent_amount, children_amounts)
+        metrics.inc("scored")
+        metrics.observe("score", score)
+
+        if score < SCORE_THRESHOLD:
+            logger.debug(f"parent {parent_hash[:8]} score={score:.4f} < {SCORE_THRESHOLD}, skip")
+            return
+
+        # score >= 1 — кандидат готов к подтверждению. Ставим в out с
+        # дедупликацией по queued-маркеру (ожидаем освобождения маркера до
+        # QUEUED_WAIT; если не дождались — PublishError → requeue события).
+        published = await enqueue_candidate(self.rabbit, self.redis, parent_hash, skip_if_queued=False)
+        if published:
+            metrics.inc("enqueued")
+            metrics.event(
+                "info",
+                "out",
+                f"{parent_hash[:8]} score={score:.2f} → out",
+                ref=parent_hash,
+                key=f"out:{parent_hash}",
+            )
         else:
-            metrics.set("weights_min", None)
-            metrics.set("weights_avg", None)
-            metrics.set("weights_max", None)
-            metrics.set("weight_buckets", None)
+            # skip_if_queued=False не возвращает False, но на всякий случай
+            # учитываем: кандидат уже стоит в очереди.
+            metrics.inc("dedup")
 
-        history = list(metrics.gauge("cycle_history") or [])
-        history.append({"ts": now, "ms": cycle_ms, "sample": sample, "processed": processed, "errors": errors})
-        metrics.set("cycle_history", history[-CYCLE_HISTORY:])
-        metrics.event(
-            "info",
-            "cycle",
-            f"цикл: выборка {sample} → обработано {processed} → {errors} ошибки",
-            key="cycle",
-        )
+    # ------------------------------------------------------------------
+    # Чтение графа
+    # ------------------------------------------------------------------
 
-    async def periodic_check_pool(self, stop_event=None):
-        while not (stop_event and stop_event.is_set()):
-            await self.check_pool()
-            await asyncio.sleep(0.1)
+    async def _fetch_tx_data(self, tx_hash: str) -> dict | None:
+        """Возвращает ``t.data`` транзакции по хэшу или None."""
+        async with self.dag.driver.session() as session:
+            result = await session.run(
+                "MATCH (t:Transaction {hash: $hash}) RETURN t.data AS data",
+                hash=tx_hash,
+            )
+            record = await result.single()
+            return record["data"] if record else None
+
+    async def _fetch_parent_with_children(self, parent_hash: str) -> tuple[dict, list[dict]] | None:
+        """Возвращает данные родителя и список данных его прямых детей.
+
+        Прямые дети — только непосредственные потомки по ребрам CONFIRMS
+        (OPTIONAL MATCH без глубины), ровно то, что требует формула score.
+        """
+        async with self.dag.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (p:Transaction {hash: $hash})
+                OPTIONAL MATCH (p)-[:CONFIRMS]->(c:Transaction)
+                RETURN p.data AS parent, collect(c.data) AS children
+                """,
+                hash=parent_hash,
+            )
+            record = await result.single()
+            if not record or record["parent"] is None:
+                return None
+            children = [c for c in (record["children"] or []) if c is not None]
+            return record["parent"], children
 
 
 class ConfirmationService:
+    """Сервис confirmer: потребляет mid, публикует кандидатов в out."""
+
     def __init__(self):
-        self.dag = Memgraph()
         self.redis = Redis()
+        self.dag = Memgraph()
         self.rabbit = RabbitMQ()
-        self.processor = ConfirmationProcessor(self.redis, self.dag)
+        self.processor = ConfirmationProcessor(self.redis, self.dag, self.rabbit)
         self.running = False
 
     async def run(self, stop_event=None) -> None:
         self.running = True
         try:
             await self.startup()
-            logger.info(f"Confirmation process {os.getpid()} started")
-            await self.processor.periodic_check_pool(stop_event)
+            logger.info("Confirmer started")
+            await self.rabbit.consume_messages(MID_QUEUE, self.processor.process_event, stop_event=stop_event)
         except Exception as e:
-            logger.error(f"Service error: {e}", exc_info=True)
+            logger.error(f"Confirmer error: {e}", exc_info=True)
             raise
         finally:
             await self.shutdown()
 
     async def startup(self) -> None:
         await self.redis.connect()
+        await self.rabbit.connect()
         await self.dag.connect()
 
     async def shutdown(self) -> None:
         self.running = False
         await self.redis.close()
+        if self.rabbit.connection and not self.rabbit.connection.is_closed:
+            await self.rabbit.close()
+            logger.info("RabbitMQ connection closed")
         await self.dag.close()
-        logger.info("All connections closed")
+        logger.info("Confirmer connections closed")

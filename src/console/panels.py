@@ -17,10 +17,8 @@ from src.console.style import (
     fmt_int,
     fmt_ms,
     fmt_rate,
-    fmt_weight_bars,
     paint,
     short_hash,
-    sparkline,
 )
 
 UNKNOWN = "UNKNOWN"
@@ -33,9 +31,6 @@ TITLES = {
     "write": "5 · WRITER / settlement",
     "tx": "6 · TX BOT",
 }
-
-# Края корзин распределения весов обработанной выборки.
-WEIGHT_BUCKETS = ((0, 1), (1, 2), (2, 3), (3, 5), (5, 10), (10, None))
 
 
 def _counter(snap: dict[str, Any] | None, name: str) -> int:
@@ -194,10 +189,12 @@ def build_cons_panel(
     rate = _rate(received, prev_received, dt)
     rejects = sum(_counter(snap, k) for k in ("dup", "no_funds", "no_parent", "bad_format", "cycle", "error"))
     rows = [
-        f"сообщений {fmt_int(received)} · в граф {fmt_int(_counter(snap, 'added'))} · отказы {fmt_int(rejects)}",
+        f"сообщений {fmt_int(received)} · в граф {fmt_int(_counter(snap, 'added'))} · "
+        f"повторные {fmt_int(_counter(snap, 'retried'))} · отказы {fmt_int(rejects)}",
         f"дубликат {_counter(snap, 'dup')} · средства {_counter(snap, 'no_funds')} · "
         f"родитель {_counter(snap, 'no_parent')} · формат {_counter(snap, 'bad_format')}",
-        f"цикл {_counter(snap, 'cycle')} · ошибка {_counter(snap, 'error')} · скорость {fmt_rate(rate)}",
+        f"цикл {_counter(snap, 'cycle')} · ошибка {_counter(snap, 'error')} · "
+        f"конфликт {_counter(snap, 'conflict')} · скорость {fmt_rate(rate)}",
         _uptime_row(snap, time.time()),
     ]
     return PanelData(
@@ -212,29 +209,23 @@ def build_cons_panel(
 def build_conf_panel(
     snap: dict[str, Any] | None, prev: dict[str, Any] | None, status: str, use_color: bool = True
 ) -> PanelData:
-    now = time.time()
-    nodes = _gauge(snap, "nodes_total")
-    sample = _gauge(snap, "sample_size")
-    cycle_ms = _gauge(snap, "cycle_ms")
-    last_cycle = _gauge(snap, "last_cycle_at")
-    since = fmt_dur(now - last_cycle) if last_cycle else UNKNOWN
-    weights_min = _gauge(snap, "weights_min")
-    weights_avg = _gauge(snap, "weights_avg")
-    weights_max = _gauge(snap, "weights_max")
-    history = _gauge(snap, "cycle_history") or []
-    spark = sparkline([h.get("ms", 0) for h in history], 16)
+    """Панель confirmer: событийная обработка mid и публикация кандидатов в out.
+
+    Никаких весов/глубин: score считается в памяти по прямым детям и не хранится.
+    """
+    events = _counter(snap, "events")
+    prev_events = _counter(prev, "events") if prev else None
+    dt = (snap or {}).get("ts", 0) - (prev or {}).get("ts", 0) if snap and prev else None
+    rate = _rate(events, prev_events, dt)
+    obs = _obs(snap, "score")
+    avg_score = obs["sum"] / obs["count"] if obs.get("count") else None
     rows = [
-        f"узлов в графе {fmt_int(nodes)} · выборка ≤100: {fmt_int(sample) if sample is not None else UNKNOWN}",
-        f"циклы {fmt_int(_counter(snap, 'cycles'))} · обработано {fmt_int(_counter(snap, 'processed'))} · "
-        f"ошибки {fmt_int(_counter(snap, 'errors'))}",
-        f"цикл {fmt_ms(cycle_ms)} · с конца цикла {since}",
-        f"веса выборки min {fmt_float(weights_min)} · avg {fmt_float(weights_avg)} · max {fmt_float(weights_max)}",
-        fmt_weight_bars(_gauge(snap, "weight_buckets")),
-        f"порог CONFIRM_WEIGHT={_gauge(snap, 'confirm_weight', '?')} · MAX_DEPTH={_gauge(snap, 'max_depth', '?')} · "
-        f"DAMPING={_gauge(snap, 'damping', '?')}",
-        f"последний цикл: выбрано {_gauge(snap, 'last_sample', '?')} → обработано "
-        f"{_gauge(snap, 'last_processed', '?')} → {_gauge(snap, 'last_errors', '?')} ошибки",
-        f"история циклов {spark}" if spark else f"история циклов {UNKNOWN}",
+        f"события mid {fmt_int(events)} · родителей оценено {fmt_int(_counter(snap, 'scored'))} · {fmt_rate(rate)}",
+        f"в out {fmt_int(_counter(snap, 'enqueued'))} · дедупликация {fmt_int(_counter(snap, 'dedup'))} · "
+        f"не найдено {fmt_int(_counter(snap, 'not_found'))}",
+        f"score min {fmt_float(obs.get('min'))} · avg {fmt_float(avg_score)} · max {fmt_float(obs.get('max'))}",
+        f"ошибки {fmt_int(_counter(snap, 'errors'))} · битый формат {fmt_int(_counter(snap, 'bad_format'))}",
+        "формула: transfer_score(own) + Σ transfer_score(child)/3 · порог score ≥ 1",
     ]
     return PanelData(
         title=TITLES["conf"],
@@ -248,16 +239,18 @@ def build_conf_panel(
 def build_write_panel(
     snap: dict[str, Any] | None, prev: dict[str, Any] | None, status: str, use_color: bool = True
 ) -> PanelData:
+    """Панель writer: обработка очереди out и финализация транзакций."""
     confirmed = _counter(snap, "confirmed")
     interval = confirmed - _counter(prev, "confirmed") if prev is not None else None
     rows = [
         f"подтверждено всего {fmt_int(confirmed)} · за интервал "
-        f"{fmt_int(interval) if interval is not None else UNKNOWN} · найдено выше порога "
-        f"{fmt_int(_gauge(snap, 'above_threshold')) if _gauge(snap, 'above_threshold') is not None else UNKNOWN}",
+        f"{fmt_int(interval) if interval is not None else UNKNOWN}",
+        f"отложено {fmt_int(_counter(snap, 'deferred'))} · перепоставлено {fmt_int(_counter(snap, 'requeued'))} · "
+        f"отброшено (пул) {fmt_int(_counter(snap, 'dropped'))}",
         f"недостаток средств {_counter(snap, 'insufficient')} · дубликаты {_counter(snap, 'dup')} · "
-        f"ошибки записи {_counter(snap, 'insert_errors')}",
-        f"ошибки Redis {_counter(snap, 'redis_errors')} · компенсации {_counter(snap, 'compensation')} · "
-        f"ошибки удаления {_counter(snap, 'delete_errors')}",
+        f"мёртвый родитель {_counter(snap, 'parent_dead')}",
+        f"ошибки записи {_counter(snap, 'insert_errors')} · Redis {_counter(snap, 'redis_errors')} · "
+        f"компенсации {_counter(snap, 'compensation')} · удаления {_counter(snap, 'delete_errors')}",
         _uptime_row(snap, time.time()),
     ]
     return PanelData(

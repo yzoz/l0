@@ -2,7 +2,6 @@
 
 import json
 import socket
-import time
 
 import pytest
 
@@ -251,32 +250,29 @@ def test_cons_panel_reasons_and_short_ids():
     assert "a" * 64 not in frame  # полный хэш не выводится на основной экран
 
 
-def test_conf_panel_separates_nodes_and_sample():
+def test_conf_panel_mid_events_and_score():
+    """Панель confirmer показывает событийную статистику mid и score, без весов."""
     m = get_metrics()
-    m.set("nodes_total", 5432)
-    m.set("sample_size", 100)
-    m.set("cycle_ms", 120.0)
-    m.set("last_cycle_at", time.time())
-    m.set("last_sample", 100)
-    m.set("last_processed", 97)
-    m.set("last_errors", 3)
-    m.set("weights_min", 1.0)
-    m.set("weights_avg", 3.2)
-    m.set("weights_max", 12.4)
-    m.set("weight_buckets", [[0, 1, 10], [10, None, 2]])
-    m.set("confirm_weight", 10)
-    m.set("max_depth", 7)
-    m.set("damping", 0.5)
-    m.set("cycle_history", [{"ts": time.time(), "ms": 100}])
-    m.inc("cycles", 5)
+    m.inc("events", 42)
+    m.inc("scored", 120)
+    m.inc("enqueued", 15)
+    m.inc("dedup", 3)
+    m.inc("not_found", 2)
+    m.inc("errors", 1)
+    m.observe("score", 0.5)
+    m.observe("score", 1.2)
     snap = m.snapshot()
     data = build_conf_panel(snap, None, "UP", use_color=False)
     text = "\n".join(data.rows)
-    assert "узлов в графе 5,432" in text
-    assert "выборка ≤100: 100" in text
-    assert "CONFIRM_WEIGHT=10" in text and "MAX_DEPTH=7" in text and "DAMPING=0.5" in text
-    assert "выбрано 100 → обработано 97 → 3 ошибки" in text
-    assert "min 1.00" in text and "max 12.40" in text
+    assert "события mid 42" in text
+    assert "родителей оценено 120" in text
+    assert "в out 15" in text
+    assert "дедупликация 3" in text
+    # Никаких весов/порогов/глубин — они удалены из пайплайна.
+    assert "CONFIRM_WEIGHT" not in text
+    assert "MAX_DEPTH" not in text
+    assert "DAMPING" not in text
+    assert "веса" not in text
 
 
 def test_write_panel_interval_and_total():
@@ -379,10 +375,11 @@ async def test_consumer_counts_events():
     redis.client.lock.return_value.__aenter__ = AsyncMock()
     redis.client.lock.return_value.__aexit__ = AsyncMock()
     processor = ConsumerProcessor(rabbit, db, redis, dag)
+    processor._fetch_graph_data = AsyncMock(return_value=None)
     processor.check_duplicate = AsyncMock(return_value=True)
 
     content = {
-        "parents": ["p1", "p2"],
+        "parents": ["p1", "p2", "p3"],
         "credit": "c",
         "debit": pk[0],
         "amount": 1,
@@ -425,16 +422,16 @@ async def test_writer_duplicate_counts():
     from service.writer import WriterProcessor
 
     m = get_metrics()
-    db, redis, dag = MagicMock(), MagicMock(), MagicMock()
+    db, redis, dag, rabbit = MagicMock(), MagicMock(), MagicMock(), MagicMock()
     db.insert_tx = AsyncMock(side_effect=DuplicateKeyError("dup"))
     redis.client.lock = MagicMock()
     redis.client.lock.return_value.__aenter__ = AsyncMock()
     redis.client.lock.return_value.__aexit__ = AsyncMock()
-    processor = WriterProcessor(db, redis, dag)
+    processor = WriterProcessor(db, redis, dag, rabbit)
     processor._delete_node = AsyncMock(return_value=True)
     session = MagicMock()
     data = {
-        "parents": ["p1", "p2"],
+        "parents": ["p1", "p2", "p3"],
         "credit": "c",
         "debit": pk[0],
         "amount": 1,
@@ -443,17 +440,19 @@ async def test_writer_duplicate_counts():
         "sign": "s",
         "time": 1,
     }
-    await processor._confirm(session, "h" * 64, data)
+    status = await processor._confirm(session, "h" * 64, data)
+    assert status == "dup"
     assert m.counter("dup") == 1
     assert m.counter("confirmed") == 0
     events = m.snapshot()["events"]
     assert events and "дубликат" in events[-1]["text"]
 
 
-async def test_confirmer_records_cycle_stats():
+async def test_confirmer_scores_parents_from_graph():
+    """Confirmer: событие mid пересчитывает score трёх родителей, score>=1 уходит в out."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from service.confirmer import ConfirmationProcessor
+    from service.confirmer import ConfirmationProcessor, candidate_score
 
     m = get_metrics()
 
@@ -474,13 +473,17 @@ async def test_confirmer_records_cycle_stats():
             except StopIteration as err:
                 raise StopAsyncIteration from err
 
+    # Родитель с amount=100000 и одним ребёнком amount=50000:
+    # score ≈ transfer_score(100000) + transfer_score(50000)/3 ≈ 0.98 + 0.27 ≈ 1.25 >= 1.
     class FakeSession:
         async def run(self, query, **params):
-            if "count(t)" in query:
-                return FakeResult([{"total": 5432}])
-            if "ORDER BY rand()" in query:
-                return FakeResult([{"t.hash": "a" * 64}, {"t.hash": "b" * 64}])
-            return FakeResult([{"indirect_weight": 2.0}])
+            if "RETURN t.data" in query:
+                return FakeResult([{"data": {"parents": ["p1", "p2", "p3"], "amount": 50000}}])
+            if "collect(c.data)" in query:
+                return FakeResult(
+                    [{"parent": {"amount": 100000}, "children": [{"amount": 50000}]}]
+                )
+            return FakeResult([])
 
         async def __aenter__(self):
             return self
@@ -488,21 +491,33 @@ async def test_confirmer_records_cycle_stats():
         async def __aexit__(self, *args):
             return False
 
-    dag = MagicMock()
-    dag.driver.session = MagicMock(return_value=FakeSession())
-    redis = MagicMock()
-    redis.client.lock = MagicMock()
-    redis.client.lock.return_value.__aenter__ = AsyncMock()
-    redis.client.lock.return_value.__aexit__ = AsyncMock()
+    class FakeDag:
+        def __init__(self):
+            self.driver = MagicMock()
+            self.driver.session = MagicMock(return_value=FakeSession())
 
-    processor = ConfirmationProcessor(redis, dag)
-    await processor.check_pool()
-    snap = m.snapshot()
-    assert snap["gauges"]["nodes_total"] == 5432
-    assert snap["gauges"]["sample_size"] == 2
-    assert snap["counters"]["processed"] == 2
-    assert snap["counters"]["errors"] == 0
-    assert snap["gauges"]["last_sample"] == 2
-    assert snap["gauges"]["weights_avg"] == 3.0
-    assert snap["gauges"]["weight_buckets"][3][2] == 2  # вес 3.0 попадает в корзину 3–5
-    assert snap["gauges"]["cycle_history"]
+    rabbit = MagicMock()
+    rabbit.publish_message = AsyncMock()
+    redis = MagicMock()
+    redis.client = MagicMock()
+    redis.client.set = AsyncMock(return_value=True)
+    redis.client.get = AsyncMock(return_value="tok")
+    redis.client.delete = AsyncMock()
+
+    processor = ConfirmationProcessor(redis, FakeDag(), rabbit)
+    message = MagicMock()
+    message.body = ("a" * 128).encode()
+    message.ack = AsyncMock()
+    message.nack = AsyncMock()
+    await processor.process_event(message)
+
+    message.ack.assert_called_once()
+    assert m.counter("events") == 1
+    assert m.counter("scored") == 3  # три родителя оценены
+    assert m.counter("enqueued") >= 1  # хотя бы один кандидат прошёл порог
+
+    # Проверка формулы score напрямую.
+    score = candidate_score(100000, [50000])
+    assert score >= 1.0
+    # Без детей — всегда меньше порога (transfer_score < 1).
+    assert candidate_score(10**9, []) < 1.0

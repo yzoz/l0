@@ -156,24 +156,3 @@ def sparkline(values: list[float | int], width: int = 16) -> str:
         return SPARK[0] * len(data)
     span = hi - lo
     return "".join(SPARK[min(len(SPARK) - 1, int((v - lo) / span * (len(SPARK) - 1)))] for v in data)
-
-
-def fmt_weight_bars(buckets: list[list] | None, width: int = 12) -> str:
-    """Распределение весов обработанной выборки в виде полос.
-
-    buckets: [[lo, hi, count], ...] — границы и число узлов выборки.
-    """
-    if not buckets:
-        return "UNKNOWN"
-    counts = [int(b[2]) for b in buckets]
-    total = sum(counts)
-    if total <= 0:
-        return "пусто"
-    peak = max(counts) or 1
-    parts = []
-    for lo, hi, count in buckets:
-        bar_len = max(1, round(count / peak * 4)) if count else 0
-        bar = "▇" * bar_len
-        label = f"{lo:g}–{hi:g}" if hi not in (None, float("inf")) else f"{lo:g}+"
-        parts.append(f"{label} {bar} {count}")
-    return clip("  ".join(parts), width) if width else "  ".join(parts)

@@ -3,7 +3,7 @@
 Проверяет согласованность хранилищ ПОСЛЕ того, как конвейер осел
 (genesis подтверждён, транзакции обработаны consumer→confirmer→writer):
 
-    consumer → Memgraph → confirmer (weight) → writer → MongoDB + Redis
+    consumer → Memgraph → confirmer (score) → writer → MongoDB + Redis
 
 Инварианты (проверяются на живых данных MongoDB/Redis):
 

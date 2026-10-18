@@ -15,7 +15,7 @@ def tx_write():
         debit="EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU2",
         amount=100,
         uniq="tx123",
-        parents=["parent1", "parent2"],
+        parents=["parent1", "parent2", "parent3"],
         msg="test",
         sign="signature",
         hash="tx_hash_123",

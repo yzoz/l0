@@ -87,12 +87,12 @@ async def main():
                 tx_dict["time"] = int(time.time_ns() / 1000)
                 tx_dict["parents"] = tx.parents
 
-                # Создание узла транзакции
+                # Создание узла транзакции. Поле weight не используется: score
+                # транзакции считается в confirmer'е в памяти и нигде не хранится.
                 await session.run(
                     """
                     CREATE (t:Transaction {
                         hash: $hash,
-                        weight: 0.0,
                         data: $data
                     })
                     """,

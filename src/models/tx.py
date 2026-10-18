@@ -13,6 +13,11 @@ from pydantic import BaseModel, PositiveInt
 from pydantic.functional_validators import AfterValidator
 from pydantic.types import MaxLen, MinLen
 
+# PARENTS фиксирует форму транзакции: ровно три уникальных родителя.
+# От этого числа зависит и формула score (вклад каждого ребёнка делится на 3),
+# поэтому оно не должно меняться независимо.
+from src.config import PARENTS
+
 
 # Функция валидации непустой строки
 def check_non_empty(value: str) -> str:
@@ -53,7 +58,9 @@ ValidKey = Annotated[str, AfterValidator(check_valid_key)]
 
 
 class Tx(BaseModel):
-    parents: Annotated[List[NonEmptyStr], MinLen(2), MaxLen(10), AfterValidator(unique_elements)]
+    # Ровно PARENTS (=3) уникальных родителя. Модель отклоняет запрос с любым
+    # другим количеством ещё до публикации в очередь in.
+    parents: Annotated[List[NonEmptyStr], MinLen(PARENTS), MaxLen(PARENTS), AfterValidator(unique_elements)]
     credit: str
     debit: Annotated[ValidKey, AfterValidator(not_equal_to_credit)]
     amount: PositiveInt
