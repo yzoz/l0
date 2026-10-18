@@ -66,7 +66,6 @@ def processor():
         yield
 
     redis.client.lock = lock
-    rabbitmq.publish_to_dlq = AsyncMock()
     redis.client.set = AsyncMock(return_value=True)
     redis.client.delete = AsyncMock()
     return ConsumerProcessor(rabbitmq, db, redis, dag)
@@ -251,13 +250,12 @@ async def test_process_transaction_retry_after_insert(processor, message, tx_sto
 
 
 @pytest.mark.asyncio
-async def test_retry_inserted_mismatch_goes_to_dlq(processor, message, tx_store):
-    """Конфликт данных при recovery: хэш совпал, но данные не те — в DLQ, второй узел не создаём."""
+async def test_retry_inserted_mismatch_terminal_reject(processor, message, tx_store):
+    """Конфликт данных при recovery: хэш совпал, но данные не те — терминальный отказ, второй узел не создаём."""
     existing = dict(tx_store, time=12345)
     existing["amount"] = 999  # расхождение данных при том же хэше
-    processor._reject = AsyncMock()
     await processor._retry_inserted("a" * 128, tx_store, existing, message)
-    processor._reject.assert_called_once()
+    message.nack.assert_called_once_with(requeue=False)
     message.ack.assert_not_called()
 
 

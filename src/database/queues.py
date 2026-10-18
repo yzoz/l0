@@ -11,7 +11,6 @@
         чей score >= 1.
 * out — plain-text tx_hash кандидата. Writer обрабатывает кандидата: проверка
         родителей, баланса, финализация в Mongo/Redis, удаление из графа.
-* in.dlq — «парковка» отбракованных сообщений; публикация best effort.
 
 Сообщения persistent, очереди durable. Внимание: default_exchange молча
 отбрасывает сообщения в необъявленную очередь, поэтому все очереди объявляются
@@ -22,10 +21,9 @@ import asyncio
 import logging
 import uuid
 
-from aio_pika import DeliveryMode, IncomingMessage, Message, connect_robust
+from aio_pika import DeliveryMode, Message, connect_robust
 
 from src.config import (
-    DLQ_QUEUE,
     IN_QUEUE,
     MID_QUEUE,
     OUT_QUEUE,
@@ -42,7 +40,6 @@ __all__ = [
     "IN_QUEUE",
     "MID_QUEUE",
     "OUT_QUEUE",
-    "DLQ_QUEUE",
     "enqueue_candidate",
     "queued_token",
     "release_queued",
@@ -55,7 +52,8 @@ class PublishError(RuntimeError):
 
     Сигнал для вызывающего кода: событие НЕ потеряно, нужно nack(requeue=True)
     и повторить обработку позже. В отличие от бизнес-ошибок (bad-json, конфликт
-    уникальности) такие ошибки никогда не отправляются в DLQ.
+    уникальности) такие ошибки не приводят к терминальному отказу — сообщение
+    всегда возвращается в очередь.
     """
 
 
@@ -73,7 +71,7 @@ class RabbitMQ:
         self.connection = await connect_robust("amqp://guest:guest@localhost/")
         self.channel = await self.connection.channel()
         # await self.rabbitmq.channel.set_qos(prefetch_count=1)
-        for queue_name in (IN_QUEUE, MID_QUEUE, OUT_QUEUE, DLQ_QUEUE):
+        for queue_name in (IN_QUEUE, MID_QUEUE, OUT_QUEUE):
             await self.channel.declare_queue(queue_name, durable=True)
 
     async def publish_message(self, queue_name, message: str):
@@ -81,21 +79,6 @@ class RabbitMQ:
         await self.channel.default_exchange.publish(
             Message(message.encode("utf-8"), delivery_mode=DeliveryMode.PERSISTENT), routing_key=queue_name
         )
-
-    async def publish_to_dlq(self, message: IncomingMessage, reason: str):
-        """Сохраняет отбракованное сообщение в DLQ (вместе с причиной отказа)."""
-        try:
-            await self.channel.default_exchange.publish(
-                Message(
-                    message.body,
-                    delivery_mode=DeliveryMode.PERSISTENT,
-                    headers={"x-dlq-reason": reason},
-                ),
-                routing_key=DLQ_QUEUE,
-            )
-        except Exception as e:
-            # DLQ — best effort: само сообщение всё равно отбраковывается.
-            logger.error("Failed to publish message to DLQ (%s): %s", reason, e)
 
     async def consume_messages(self, queue_name: str, callback: callable, stop_event=None):
         """Потребление сообщений из очереди."""

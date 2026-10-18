@@ -13,11 +13,9 @@ RABBITMQ_TIMEOUT = 5
 #   in  — API публикует подписанные транзакции (JSON TxStore), consumer пишет их в граф.
 #   mid — consumer → confirmer: plain-text tx_hash успешно записанной транзакции.
 #   out — confirmer → writer: plain-text tx_hash кандидата со score >= 1.
-#   in.dlq — «парковка» отбракованных сообщений (bad-json, конфликты и т.п.).
 IN_QUEUE = "in"
 MID_QUEUE = "mid"
 OUT_QUEUE = "out"
-DLQ_QUEUE = "in.dlq"
 
 # --- Балансы ---
 # Тайм-аут обращения к Redis/MongoDB при чтении баланса (секунды).

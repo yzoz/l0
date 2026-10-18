@@ -94,14 +94,22 @@ class ConfirmationProcessor:
             удалена из графа как подтверждённая — тогда пропускаем);
           * nack(requeue=True) — временные ошибки графа/очередей, событие
             вернётся и будет обработано повторно;
-          * DLQ — повреждённое сообщение (не tx_hash).
+          * nack(requeue=False) — повреждённое сообщение (не tx_hash) или
+            необработанное исключение: терминальный отказ.
         """
         tx_hash = message.body.decode("utf-8").strip()
         # Валидация формата: событие — строго plain-text tx_hash без JSON.
         if not _HASH_RE.match(tx_hash):
             logger.error(f"Invalid mid payload: {tx_hash[:64]!r}")
             metrics.inc("bad_format")
-            await self.rabbit.publish_to_dlq(message, "bad-mid-payload")
+            #LOGGING: терминальный отказ — повреждённое событие mid, сообщение исключается.
+            # Для timeseries DB фиксируется событие:
+            #   service   = "confirmer"
+            #   event     = "reject"
+            #   reason    = "bad-mid-payload"
+            #   outcome   = "drop"       # терминально, retry не будет
+            #   payload   = tx_hash       # сырое тело сообщения (до 64 символов)
+            #   queue     = "mid"
             await message.nack(requeue=False)
             return
 
@@ -118,7 +126,15 @@ class ConfirmationProcessor:
             logger.error(f"Unexpected confirmer error for {tx_hash[:8]}: {e}", exc_info=True)
             metrics.inc("errors")
             metrics.event("error", "conf", f"{tx_hash[:8]} ошибка confirmer: {type(e).__name__}", ref=tx_hash)
-            await self.rabbit.publish_to_dlq(message, f"confirmer:{type(e).__name__}")
+            #LOGGING: терминальный отказ — необработанное исключение confirmer, сообщение исключается.
+            # Для timeseries DB фиксируется событие:
+            #   service   = "confirmer"
+            #   event     = "reject"
+            #   reason    = f"confirmer:{type(e).__name__}"
+            #   outcome   = "drop"       # терминально, retry не будет
+            #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
+            #   error     = str(e)       # текст исключения для диагностики
+            #   queue     = "mid"
             await message.nack(requeue=False)
             return
 

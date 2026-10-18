@@ -8,6 +8,9 @@ def transfer_score(x, alpha, beta):
     """
     return 1 - (1 + alpha * x) ** (-beta)
 
+for x in range(1, 100000, 1000):
+    print(transfer_score(x, alpha, beta), x)
+
 '''
 пусть пока будет здесь
 
@@ -17,9 +20,6 @@ def logistic(x, k=1.0, x0=0.0):
     k — крутизна
     """
     return 1 / (1 + math.exp(-k * (x - x0)))
-
-for x in range(1, 100000, 1000):
-    print(sigmoid(x, alpha, beta), x)
 
 x0 = 5000
 k = 0.00001

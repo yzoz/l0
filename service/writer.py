@@ -91,13 +91,21 @@ class WriterProcessor:
             отложен, отброшен min-pool guard'ом или уже обработан);
           * nack(requeue=True) — временная ошибка: маркер queued остаётся,
             сообщение вернётся и обработка повторится;
-          * DLQ — повреждённое сообщение (не tx_hash).
+          * nack(requeue=False) — повреждённое сообщение (не tx_hash) или
+            необработанное исключение: терминальный отказ.
         """
         tx_hash = message.body.decode("utf-8").strip()
         if not _HASH_RE.match(tx_hash):
             logger.error(f"Invalid out payload: {tx_hash[:64]!r}")
             metrics.inc("bad_format")
-            await self.rabbit.publish_to_dlq(message, "bad-out-payload")
+            #LOGGING: терминальный отказ — повреждённое событие out, сообщение исключается.
+            # Для timeseries DB фиксируется событие:
+            #   service   = "writer"
+            #   event     = "reject"
+            #   reason    = "bad-out-payload"
+            #   outcome   = "drop"       # терминально, retry не будет
+            #   payload   = tx_hash       # сырое тело сообщения (до 64 символов)
+            #   queue     = "out"
             await message.nack(requeue=False)
             return
 
@@ -114,7 +122,15 @@ class WriterProcessor:
             logger.error(f"Unexpected writer error for {tx_hash[:8]}: {e}", exc_info=True)
             metrics.inc("errors")
             metrics.event("error", "write", f"{tx_hash[:8]} ошибка writer: {type(e).__name__}", ref=tx_hash)
-            await self.rabbit.publish_to_dlq(message, f"writer:{type(e).__name__}")
+            #LOGGING: терминальный отказ — необработанное исключение writer, сообщение исключается.
+            # Для timeseries DB фиксируется событие:
+            #   service   = "writer"
+            #   event     = "reject"
+            #   reason    = f"writer:{type(e).__name__}"
+            #   outcome   = "drop"       # терминально, retry не будет
+            #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
+            #   error     = str(e)       # текст исключения для диагностики
+            #   queue     = "out"
             await message.nack(requeue=False)
             return
 

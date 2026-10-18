@@ -19,6 +19,11 @@ LIFECYCLE ТРАНЗАКЦИИ (см. .docs/TODO_003.md):
   3. иначе — обычный путь: дубликат → баланс → родители → запись в граф → mid →
      подтверждение сообщения.
 
+Терминальные отказы (bad-json, дубликат, недостаточно средств, нет родителя,
+цикл, конфликт данных) приводят к nack(requeue=False) — сообщение исключается
+без повторной обработки. Метаданные для логирования фиксируются в комментариях
+#LOGGING в местах отказов.
+
 uniq-резерв (``uniq:{credit}:{uniq}``) снимается ТОЛЬКО на путях отказа, где
 узел ещё НЕ записан в граф. Если узел записан (или пишется повторно), резерв
 остаётся навсегда — это guard от повторной вставки того же (credit, uniq).
@@ -64,8 +69,9 @@ class ConsumerProcessor:
           * ack — только после успешной записи в граф И успешной публикации mid;
           * nack(requeue=True) — временные ошибки (таймаут, сбой публикации mid,
             сбой графа): сообщение вернётся и будет обработано повторно;
-          * nack(requeue=False) + копия в DLQ — бизнес-отказы (bad-json, дубликат,
-            недостаточно средств, нет родителя, цикл, конфликт данных).
+          * nack(requeue=False) — терминальные бизнес-отказы (bad-json, дубликат,
+            недостаточно средств, нет родителя, цикл, конфликт данных):
+            сообщение исключается без повторной обработки.
         """
         try:
             tx = self.parse_message(message)
@@ -74,7 +80,15 @@ class ConsumerProcessor:
             logger.error("Failed to parse message: Invalid JSON format")
             metrics.inc("bad_format")
             metrics.event("error", "format", "формат сообщения: невалидный JSON", key="format")
-            await self._reject(message, "bad-json")
+            #LOGGING: терминальный отказ — сообщение исключается без повторной обработки.
+            # Для timeseries DB фиксируется событие:
+            #   service   = "consumer"
+            #   event     = "reject"
+            #   reason    = "bad-json"
+            #   outcome   = "drop"       # терминально, retry не будет
+            #   payload   = message.body.decode("utf-8", errors="replace")  # сырое тело для архива
+            #   queue     = "in"
+            await message.nack(requeue=False)
         except asyncio.TimeoutError:
             logger.error("Timeout during processing")
             metrics.inc("error")
@@ -84,12 +98,16 @@ class ConsumerProcessor:
             logger.error(f"Unexpected processing error: {e}", exc_info=True)
             metrics.inc("error")
             metrics.event("error", "error", f"ошибка обработки: {type(e).__name__}", key=f"error:{type(e).__name__}")
-            await self._reject(message, f"error:{type(e).__name__}")
-
-    async def _reject(self, message: IncomingMessage, reason: str) -> None:
-        """Отбраковывает сообщение: копия уходит в DLQ, оригинал — в отказ."""
-        await self.rabbit.publish_to_dlq(message, reason)
-        await message.nack(requeue=False)
+            #LOGGING: терминальный отказ — необработанное исключение, сообщение исключается.
+            # Для timeseries DB фиксируется событие:
+            #   service   = "consumer"
+            #   event     = "reject"
+            #   reason    = f"error:{type(e).__name__}"
+            #   outcome   = "drop"       # терминально, retry не будет
+            #   error     = str(e)       # текст исключения для диагностики
+            #   payload   = message.body.decode("utf-8", errors="replace")
+            #   queue     = "in"
+            await message.nack(requeue=False)
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
         """Преобразует сырые данные сообщения в объект TxStore.
@@ -134,7 +152,18 @@ class ConsumerProcessor:
                 logger.info(f"Duplicate transaction: {tx_hash}")
                 metrics.inc("dup")
                 metrics.event("warn", "dup", f"{short} дубликат", ref=tx_hash, key=f"dup:{tx_hash}")
-                await self._reject(message, "dup")
+                #LOGGING: терминальный отказ — дубликат (credit, uniq), сообщение исключается.
+                # Для timeseries DB фиксируется событие:
+                #   service   = "consumer"
+                #   event     = "reject"
+                #   reason    = "dup"
+                #   outcome   = "drop"       # терминально, retry не будет
+                #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
+                #   credit    = tx.credit     # адрес плательщика
+                #   uniq      = tx.uniq       # nonce транзакции
+                #   amount    = tx.amount     # сумма
+                #   parents   = tx.parents    # родители (3 шт.)
+                await message.nack(requeue=False)
                 return
 
             # Дальше uniq зарезервирован: на любом отказе резерв снимается
@@ -148,7 +177,18 @@ class ConsumerProcessor:
                     metrics.event(
                         "warn", "funds", f"{short} недостаточно средств", ref=tx_hash, key=f"funds:{tx_hash}"
                     )
-                    await self._reject(message, "funds")
+                    #LOGGING: терминальный отказ — недостаточно средств, сообщение исключается.
+                    # Для timeseries DB фиксируется событие:
+                    #   service   = "consumer"
+                    #   event     = "reject"
+                    #   reason    = "funds"
+                    #   outcome   = "drop"       # терминально, retry не будет
+                    #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
+                    #   credit    = tx.credit     # адрес плательщика (у кого не хватило)
+                    #   amount    = tx.amount     # запрошенная сумма
+                    #   uniq      = tx.uniq       # nonce транзакции
+                    #   parents   = tx.parents    # родители (3 шт.)
+                    await message.nack(requeue=False)
                     await self.release_uniq(tx)
                     return
 
@@ -156,13 +196,35 @@ class ConsumerProcessor:
                 if not await self.verify_parents(tx_hash, tx):
                     metrics.inc("no_parent")
                     metrics.event("warn", "parent", f"{short} нет родителя", ref=tx_hash, key=f"parent:{tx_hash}")
-                    await self._reject(message, "parent")
+                    #LOGGING: терминальный отказ — родитель не найден, сообщение исключается.
+                    # Для timeseries DB фиксируется событие:
+                    #   service   = "consumer"
+                    #   event     = "reject"
+                    #   reason    = "parent"
+                    #   outcome   = "drop"       # терминально, retry не будет
+                    #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
+                    #   credit    = tx.credit     # адрес плательщика
+                    #   amount    = tx.amount     # сумма
+                    #   parents   = tx.parents    # родители (3 шт.) — какой именно отсутствует
+                    #   uniq      = tx.uniq       # nonce транзакции
+                    await message.nack(requeue=False)
                     await self.release_uniq(tx)
                     return
 
                 # Шаг 4. Запись узла и рёбер в граф.
                 if not await self.add_to_graph(tx_hash, tx):
-                    await self._reject(message, "graph")
+                    #LOGGING: терминальный отказ — ошибка записи в граф или цикл, сообщение исключается.
+                    # Для timeseries DB фиксируется событие:
+                    #   service   = "consumer"
+                    #   event     = "reject"
+                    #   reason    = "graph"
+                    #   outcome   = "drop"       # терминально, retry не будет
+                    #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
+                    #   credit    = tx.credit     # адрес плательщика
+                    #   amount    = tx.amount     # сумма
+                    #   parents   = tx.parents    # родители (3 шт.)
+                    #   uniq      = tx.uniq       # nonce транзакции
+                    await message.nack(requeue=False)
                     await self.release_uniq(tx)
                     return
 
@@ -207,7 +269,8 @@ class ConsumerProcessor:
 
           1. сверяем данные из сообщения с данными узла в графе (без поля time
              — оно проставляется при записи и может отличаться при реплее);
-             при расхождении — конфликт данных, в DLQ, второй узел не создаём;
+             при расхождении — конфликт данных, терминальный отказ, второй узел
+             не создаём;
           2. гарантируем наличие рёбер CONFIRMS (MERGE — идемпотентно) и
              отсутствие цикла;
           3. перепубликуем mid (это главная цель recovery);
@@ -226,7 +289,18 @@ class ConsumerProcessor:
             logger.error(f"Hash/data conflict on retry: {tx_hash}")
             metrics.inc("conflict")
             metrics.event("error", "conflict", f"{short} конфликт данных", ref=tx_hash, key=f"conflict:{tx_hash}")
-            await self._reject(message, "hash-conflict")
+            #LOGGING: терминальный отказ — конфликт данных при recovery (хэш совпал, данные различаются).
+            # Для timeseries DB фиксируется событие:
+            #   service   = "consumer"
+            #   event     = "reject"
+            #   reason    = "hash-conflict"
+            #   outcome   = "drop"       # терминально, retry не будет
+            #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
+            #   incoming  = incoming      # данные из сообщения (dict TxStore)
+            #   stored    = stored        # данные из графа (без time) для аудита расхождения
+            #   credit    = tx.credit     # адрес плательщика
+            #   uniq      = tx.uniq       # nonce транзакции
+            await message.nack(requeue=False)
             return
 
         # Шаг 2. Рёбра могли не успеть создаться до сбоя — дописываем идемпотентно.
