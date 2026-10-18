@@ -449,7 +449,7 @@ async def test_writer_duplicate_counts():
 
 
 async def test_confirmer_scores_parents_from_graph():
-    """Confirmer: событие mid пересчитывает score трёх родителей, score>=1 уходит в out."""
+    """Confirmer: событие mid пересчитывает score трёх родителей через один Cypher, score>=1 уходит в out."""
     from unittest.mock import AsyncMock, MagicMock
 
     from service.confirmer import ConfirmationProcessor, candidate_score
@@ -473,15 +473,15 @@ async def test_confirmer_scores_parents_from_graph():
             except StopIteration as err:
                 raise StopAsyncIteration from err
 
-    # Родитель с amount=100000 и одним ребёнком amount=50000:
-    # score ≈ transfer_score(100000) + transfer_score(50000)/3 ≈ 0.98 + 0.27 ≈ 1.25 >= 1.
+    # Родитель internal_score=0.86 и один ребёнок internal_score=0.80:
+    # score = 0.86 + 0.80/3 ≈ 1.13 >= 1.
     class FakeSession:
         async def run(self, query, **params):
             if "RETURN t.data" in query:
                 return FakeResult([{"data": {"parents": ["p1", "p2", "p3"], "amount": 50000}}])
-            if "collect(c.data)" in query:
+            if "internal_score" in query and "children_scores" in query:
                 return FakeResult(
-                    [{"parent": {"amount": 100000}, "children": [{"amount": 50000}]}]
+                    [{"parent_score": 0.86, "children_scores": [0.80]}]
                 )
             return FakeResult([])
 
@@ -516,8 +516,8 @@ async def test_confirmer_scores_parents_from_graph():
     assert m.counter("scored") == 3  # три родителя оценены
     assert m.counter("enqueued") >= 1  # хотя бы один кандидат прошёл порог
 
-    # Проверка формулы score напрямую.
-    score = candidate_score(100000, [50000])
+    # Проверка формулы score напрямую (candidate_score — чистая арифметика).
+    score = candidate_score(0.86, [0.80])
     assert score >= 1.0
-    # Без детей — всегда меньше порога (transfer_score < 1).
-    assert candidate_score(10**9, []) < 1.0
+    # Без детей — score = parent_internal, всегда меньше порога (transfer_score < 1).
+    assert candidate_score(0.99, []) < 1.0

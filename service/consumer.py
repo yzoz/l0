@@ -42,6 +42,7 @@ from src.database.redis import Redis
 from src.models.tx import TxStore
 from src.telemetry import metrics
 from src.utils.data import hash_hex, ordered_sum
+from src.utils.fn import alpha, beta, transfer_score
 from src.utils.profile import get_balance
 
 logger = logging.getLogger(__name__)
@@ -349,6 +350,14 @@ class ConsumerProcessor:
     async def add_to_graph(self, tx_hash: str, tx: TxStore) -> bool:
         """Добавляет транзакцию в граф Memgraph (узел + рёбра CONFIRMS).
 
+        LIFECYCLE: на этом шаге consumer вычисляет ``internal_score =
+        transfer_score(amount)`` и сохраняет его как свойство узла. Значение
+        используется двумя потребителями:
+          * confirmer — score родителя = internal_score(parent)
+            + Σ internal_score(child) / 3 (чистая арифметика, без повторной
+            вызова формулы);
+          * /pool — сортировка кандидатов по убыванию internal_score.
+
         Идемпотентно: узел и рёбра пишутся через MERGE, поэтому повторный вызов
         (ретрай после сбоя, recovery-путь) не создаст дубликатов. Поле weight
         не используется — score транзакции считается в confirmer'е в памяти и
@@ -358,15 +367,19 @@ class ConsumerProcessor:
             async with self.dag.driver.session() as session:
                 now = int(time.time_ns() / 1000)
                 tx_data = dict(tx, time=now)
+                # Precomputed transfer_score: вызывается ровно один раз за
+                # lifecycle транзакции. Дальше используется как есть.
+                internal_score = transfer_score(tx.amount, alpha, beta)
                 try:
                     # Узел: MERGE по hash — если уже есть, ничего не меняем.
                     await session.run(
                         """
                         MERGE (t:Transaction {hash: $hash})
-                        ON CREATE SET t.data = $data
+                        ON CREATE SET t.data = $data, t.internal_score = $internal_score
                         """,
                         hash=tx_hash,
                         data=tx_data,
+                        internal_score=internal_score,
                     )
                     # Рёбра от родителей к нашему узлу (без подтверждённых — они
                     # уже удалены из графа и их рёбра бессмысленны).

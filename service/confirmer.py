@@ -11,17 +11,19 @@ Confirmer обрабатывает СОБЫТИЯ, а не сканирует п
 
 ФОРМУЛА SCORE (транзакции t):
 
-    score(t) = transfer_score(amount(t), alpha, beta)
-             + SUM( transfer_score(amount(child), alpha, beta) / 3 )
-      по прямым детям t (ребра CONFIRMS), включая подтверждённые и удалённые
-      из графа — их вклад считается по данным из Mongo/Redis, если узел ещё в графе.
+    score(t) = internal_score(t) + SUM( internal_score(child) / 3 )
+      по прямым детям t (ребра CONFIRMS).
+
+``internal_score = transfer_score(amount)`` precomputed consumer'ом при вставке
+узла и сохранён в графе (см. service/consumer.py). Confirmer НЕ вызывает
+transfer_score — только суммирует и делит. Весь расчёт — один Cypher-запрос.
 
 * Вклад каждого ребёнка делится на фиксированную константу 3 — число родителей
   транзакции (PARENTS=3). НЕ на config-значение, а на литерал 3.
 * Внуки и более дальние потомки НЕ участвуют: никакого затухания по глубине.
 * Порог: score >= 1.0.
-* Score НИГДЕ не сохраняется: ни в графе, ни в Redis, ни в Mongo. Он всегда
-  пересчитывается из актуального состояния графа.
+* Score НИГДЕ не сохраняется — он вычисляется из internal_score при каждом
+  событии.
 * Собственная оценка новой транзакции не требуется: transfer_score по формуле
   всегда < 1 (стремится к 1 при x → ∞), поэтому транзакция без детей не может
   пройти порог. Оцениваются только родители.
@@ -41,7 +43,6 @@ from src.database.graph import Memgraph
 from src.database.queues import PublishError, RabbitMQ, enqueue_candidate
 from src.database.redis import Redis
 from src.telemetry import metrics
-from src.utils.fn import alpha, beta, transfer_score
 
 logger = logging.getLogger(__name__)
 
@@ -56,18 +57,20 @@ CHILD_DIVISOR = 3
 _HASH_RE = re.compile(r"^[0-9a-f]{128}$")
 
 
-def candidate_score(parent_amount: float, children_amounts: list[float]) -> float:
-    """Score родителя: его собственный transfer_score плюс вклад прямых детей.
+def candidate_score(parent_internal: float, children_internal: list[float]) -> float:
+    """Score родителя: его internal_score плюс вклад прямых детей.
 
-    score = transfer_score(parent.amount)
-          + SUM( transfer_score(child.amount) / CHILD_DIVISOR )
+    score = parent.internal_score
+          + SUM( child.internal_score / CHILD_DIVISOR )
 
-    Прямые дети — только непосредственные потомки по ребрам CONFIRMS. Больше
-    ни один уровень глубины не учитывается.
+    ``internal_score`` — precomputed ``transfer_score(amount)``, записанный
+    consumer'ом при вставке узла. Confirmer не вызывает формулу — только
+    суммирует и делит. Прямые дети — только непосредственные потомки по
+    ребрам CONFIRMS. Больше ни один уровень глубины не учитывается.
     """
-    score = transfer_score(parent_amount, alpha, beta)
-    for amount in children_amounts:
-        score += transfer_score(amount, alpha, beta) / CHILD_DIVISOR
+    score = parent_internal
+    for child_score in children_internal:
+        score += child_score / CHILD_DIVISOR
     return score
 
 
@@ -145,26 +148,21 @@ class ConfirmationProcessor:
     async def _score_parent(self, parent_hash: str) -> None:
         """Считает score одного родителя и при необходимости ставит его в out.
 
-        Один вызов = одна пересчёт от актуального состояния графа. При
-        параллельных событиях mid возможны конкурентные пересчёты одного
+        Один Cypher-запрос возвращает precomputed internal_score родителя и
+        его прямых детей. Дальше — чистая арифметика (сумма / делитель).
+        При параллельных событиях mid возможны конкурентные пересчёты одного
         родителя: это допустимо, очередь out дедуплицируется queued-маркером,
         а повторная обработка кандидата в writer'е идемпотентна.
         """
-        row = await self._fetch_parent_with_children(parent_hash)
+        row = await self._fetch_parent_scores(parent_hash)
         if row is None:
             # Родитель уже подтверждён/удалён из графа — считать нечего.
             logger.debug(f"parent {parent_hash[:8]} not in graph, skip")
             metrics.inc("not_found")
             return
 
-        parent_data, children_data = row
-        parent_amount = parent_data.get("amount")
-        children_amounts = [c.get("amount") for c in children_data if c and c.get("amount") is not None]
-        if parent_amount is None:
-            logger.warning(f"parent {parent_hash[:8]} has no amount, skip")
-            return
-
-        score = candidate_score(parent_amount, children_amounts)
+        parent_score, children_scores = row
+        score = candidate_score(parent_score, children_scores)
         metrics.inc("scored")
         metrics.observe("score", score)
 
@@ -204,26 +202,27 @@ class ConfirmationProcessor:
             record = await result.single()
             return record["data"] if record else None
 
-    async def _fetch_parent_with_children(self, parent_hash: str) -> tuple[dict, list[dict]] | None:
-        """Возвращает данные родителя и список данных его прямых детей.
+    async def _fetch_parent_scores(self, parent_hash: str) -> tuple[float, list[float]] | None:
+        """Возвращает internal_score родителя и список internal_score его прямых детей.
 
-        Прямые дети — только непосредственные потомки по ребрам CONFIRMS
-        (OPTIONAL MATCH без глубины), ровно то, что требует формула score.
+        Один Cypher-запрос: precomputed значения из графа, никаких вычислений
+        формулы на стороне Python. Прямые дети — только непосредственные
+        потомки по ребрам CONFIRMS (OPTIONAL MATCH без глубины).
         """
         async with self.dag.driver.session() as session:
             result = await session.run(
                 """
                 MATCH (p:Transaction {hash: $hash})
                 OPTIONAL MATCH (p)-[:CONFIRMS]->(c:Transaction)
-                RETURN p.data AS parent, collect(c.data) AS children
+                RETURN p.internal_score AS parent_score, collect(c.internal_score) AS children_scores
                 """,
                 hash=parent_hash,
             )
             record = await result.single()
-            if not record or record["parent"] is None:
+            if not record or record["parent_score"] is None:
                 return None
-            children = [c for c in (record["children"] or []) if c is not None]
-            return record["parent"], children
+            children = [s for s in (record["children_scores"] or []) if s is not None]
+            return record["parent_score"], children
 
 
 class ConfirmationService:

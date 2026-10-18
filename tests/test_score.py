@@ -1,9 +1,11 @@
 """Тесты формулы transfer_score и расчёта score кандидата.
 
 Score транзакции t (см. .docs/TODO_003.md):
-    score(t) = transfer_score(amount(t))
-             + SUM( transfer_score(amount(child)) / 3 )
+    score(t) = internal_score(t) + SUM( internal_score(child) / 3 )
       по прямым детям t. Внуки не участвуют. Порог: score >= 1.
+
+``internal_score = transfer_score(amount)`` precomputed consumer'ом.
+``candidate_score`` — чистая арифметика поверх сохранённых значений.
 """
 
 import pytest
@@ -13,6 +15,8 @@ from src.utils.fn import alpha, beta, transfer_score
 
 
 class TestTransferScore:
+    """Формула transfer_score(x, alpha, beta) в src/utils/fn.py."""
+
     def test_zero_amount_gives_zero(self):
         assert transfer_score(0, alpha, beta) == pytest.approx(0.0)
 
@@ -35,36 +39,52 @@ class TestTransferScore:
 
 
 class TestCandidateScore:
-    def test_no_children_below_threshold(self):
-        # Без детей score = transfer_score(own) < 1 при любом amount.
-        for amount in (1, 100, 10_000, 10**9):
-            assert candidate_score(amount, []) < SCORE_THRESHOLD
+    """Арифметика объединения precomputed internal_score.
+
+    candidate_score(parent_internal, children_internal) — НЕ вызывает
+    transfer_score, только суммирует и делит на CHILD_DIVISOR.
+    """
+
+    def test_divisor_is_three(self):
+        # Делитель — фиксированный литерал 3 (число родителей), не config.
+        assert CHILD_DIVISOR == 3
+
+    def test_no_children_score_is_parent_internal(self):
+        # Без детей score = parent_internal (не больше 1, т.к. transfer_score < 1).
+        assert candidate_score(0.5, []) == pytest.approx(0.5)
+        assert candidate_score(0.99, []) < SCORE_THRESHOLD
 
     def test_children_contribute_divided_by_three(self):
-        # Вклад ребёнка делится ровно на CHILD_DIVISOR (=3), а не на config.
-        assert CHILD_DIVISOR == 3
-        own = transfer_score(50000, alpha, beta)
-        child = transfer_score(50000, alpha, beta)
-        score = candidate_score(50000, [50000])
-        assert score == pytest.approx(own + child / 3)
+        # Вклад каждого ребёнка делится ровно на 3.
+        score = candidate_score(0.6, [0.9])
+        assert score == pytest.approx(0.6 + 0.9 / 3)
 
-    def test_direct_children_only(self):
-        # Формула принимает только суммы прямых детей — никакой рекурсии нет.
-        # Один большой ребёнок даёт вклад, три по трети — столько же суммарно.
-        big = candidate_score(1000, [3000])
-        three = candidate_score(1000, [1000, 1000, 1000])
-        # Вклад: transfer_score(3000)/3 vs 3 * transfer_score(1000)/3 = transfer_score(1000).
-        assert big != three  # неэквивалентны: transfer_score нелинейна
+    def test_multiple_children_sum(self):
+        # Все дети суммируются, каждый со своим /3.
+        score = candidate_score(0.1, [0.3, 0.6, 0.9])
+        assert score == pytest.approx(0.1 + 0.3 / 3 + 0.6 / 3 + 0.9 / 3)
 
     def test_score_can_reach_threshold(self):
-        # Порог достижим: родитель с крупным amount и один крупный ребёнок.
-        assert candidate_score(100_000, [50_000]) >= SCORE_THRESHOLD
+        # Порог достижим: родитель с крупным internal_score + один крупный ребёнок.
+        parent = transfer_score(100_000, alpha, beta)   # ≈ 0.86
+        child = transfer_score(50_000, alpha, beta)     # ≈ 0.80
+        assert candidate_score(parent, [child]) >= SCORE_THRESHOLD
 
     def test_small_amounts_below_threshold(self):
         # Мелкие суммы не дают прохода: score < 1.
-        assert candidate_score(100, [100, 100, 100]) < SCORE_THRESHOLD
+        parent = transfer_score(100, alpha, beta)       # ≈ 0.22
+        children = [transfer_score(100, alpha, beta)] * 3
+        assert candidate_score(parent, children) < SCORE_THRESHOLD
 
     def test_many_children_accumulate(self):
         # Много детей накапливают score за счёт суммирования вкладов.
-        children = [50_000] * 10
-        assert candidate_score(50_000, children) >= SCORE_THRESHOLD
+        parent = transfer_score(50_000, alpha, beta)    # ≈ 0.80
+        children = [transfer_score(50_000, alpha, beta)] * 10
+        assert candidate_score(parent, children) >= SCORE_THRESHOLD
+
+    def test_direct_children_only_nonlinearity(self):
+        # Формула принимает precomputed internal_score — нелинейность перенесена
+        # в transfer_score. Один крупный ребёнок и три поменьше дают разный вклад.
+        big = transfer_score(3000, alpha, beta) / 3
+        three = 3 * (transfer_score(1000, alpha, beta) / 3)
+        assert big != three  # неэквивалентны: transfer_score нелинейна

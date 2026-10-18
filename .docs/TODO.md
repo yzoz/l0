@@ -16,13 +16,13 @@ TransientError в memgraph
 у меня есть такая самописная реализация src/utils/lock.py
 
 
-у меня по коду в vscode очень много таких ошибок: var is not a known attribute of "None" PylancereportOptionalMemberAccess
+у меня по коду в vscode очень много подобных ошибок: var is not a known attribute of "None" PylancereportOptionalMemberAccess
 я понимаю суть и предлагаются подобные движухи:
 if var is not None:
-if user is None:
-assert user is not None
+if var is None:
+assert var is not None
 но как по мне - это такая узбыточность, ведь подобных мест реально очень много
-и понятно, что все они так или иначе идут из dag, db и redis
+и понятно, что все они так или иначе идут из dag, db и redis и rabbit
 может предусмотреть это где-то здесь: src/database
 
 
@@ -31,3 +31,5 @@ assert user is not None
 проверить и прокомментить весь lifecycle транзакции (исключае минт genesis) со всеми исключениями и ветвлениями - сначала в виде документа с хронологией. хорошо бы вообще svg граф на эту тему. API -> Consumer -> Confirmer -> Writer - и АБСОЛЮТНО ВСЕ действия в хронологическом порядке, образующиеся циклы, ветвления, проверки.
 
 проверять целостность графа Mongo
+
+alpha, beta - дефолтные параметры.. в будущем динамические

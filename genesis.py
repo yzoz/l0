@@ -10,6 +10,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from src.models.tx import TxStore
 from src.utils.data import hash_hex, ordered_sum
+from src.utils.fn import alpha, beta, transfer_score
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -87,17 +88,21 @@ async def main():
                 tx_dict["time"] = int(time.time_ns() / 1000)
                 tx_dict["parents"] = tx.parents
 
-                # Создание узла транзакции. Поле weight не используется: score
-                # транзакции считается в confirmer'е в памяти и нигде не хранится.
+                # Создание узла транзакции. internal_score = transfer_score(amount)
+                # — precomputed значение для сортировки /pool и расчёта score
+                # в confirmer'е. Поле weight не используется.
+                internal_score = transfer_score(tx.amount, alpha, beta)
                 await session.run(
                     """
                     CREATE (t:Transaction {
                         hash: $hash,
-                        data: $data
+                        data: $data,
+                        internal_score: $internal_score
                     })
                     """,
                     hash=tx_hash,
                     data=tx_dict,
+                    internal_score=internal_score,
                 )
 
                 # Установка баланса в Redis

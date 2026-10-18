@@ -29,12 +29,13 @@ async def pool(memgraph=Depends(get_memgraph)):
             if num_txs > threshold:
                 P = size_p
 
-        # Получение PARENTS + P старейших узлов
+        # Получение PARENTS + P кандидатов, отсортированных по убыванию
+        # internal_score (сильнейшие первыми).
         result = await session.run(
             """
             MATCH (t:Transaction)
             RETURN t.hash
-            ORDER BY t.data.time ASC
+            ORDER BY t.internal_score DESC
             LIMIT $limit
             """,
             limit=PARENTS + P,
