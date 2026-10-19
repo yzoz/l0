@@ -1,0 +1,245 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="4500" viewBox="0 0 1440 4500" role="img" aria-labelledby="title desc">
+  <title id="title">Транзакция: путь и развилки</title>
+  <desc id="desc">Вертикальная карта lifecycle обычной транзакции от API до Consumer, Confirmer и Writer, с ветками отказа, повторной доставки и подтверждения.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#080d19"/><stop offset=".55" stop-color="#10182a"/><stop offset="1" stop-color="#0a1220"/></linearGradient>
+    <linearGradient id="api" x1="0" x2="1"><stop stop-color="#6d5dfc"/><stop offset="1" stop-color="#a57bff"/></linearGradient>
+    <linearGradient id="consumer" x1="0" x2="1"><stop stop-color="#00a88b"/><stop offset="1" stop-color="#54dfb2"/></linearGradient>
+    <linearGradient id="confirmer" x1="0" x2="1"><stop stop-color="#1687e8"/><stop offset="1" stop-color="#55c5ff"/></linearGradient>
+    <linearGradient id="writer" x1="0" x2="1"><stop stop-color="#e38b25"/><stop offset="1" stop-color="#ffc55f"/></linearGradient>
+    <pattern id="dots" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#aab9d0" opacity=".10"/></pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000814" flood-opacity=".45"/></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#91a4c1"/></marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#50d8b0"/></marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#ff6f7d"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#edf3ff}
+      .eyebrow{font-size:17px;font-weight:700;letter-spacing:3px;fill:#92a4c0}
+      .title{font-size:62px;font-weight:800;letter-spacing:-1.8px}
+      .subtitle{font-size:22px;fill:#a9b8ce}
+      .section{font-size:24px;font-weight:800;letter-spacing:1px}
+      .stageNum{font-size:15px;font-weight:800;letter-spacing:2px;fill:#a6b6cc}
+      .nodeTitle{font-size:22px;font-weight:750}
+      .body{font-size:17px;fill:#b6c4d8}
+      .small{font-size:15px;fill:#a8b7cc}
+      .pill{font-size:14px;font-weight:800;letter-spacing:1px}
+      .branchTitle{font-size:17px;font-weight:800}
+      .branchBody{font-size:15px;fill:#c0ccdd}
+      .foot{font-size:16px;fill:#9aabc2}
+      .lane{fill:#111d30;stroke:#263650;stroke-width:1.5}
+      .card{fill:#152238;stroke:#314360;stroke-width:1.5}
+      .branch{fill:#141e30;stroke:#33435c;stroke-width:1.5}
+      .ok{fill:#0e2b2b;stroke:#1a8874;stroke-width:1.5}
+      .warn{fill:#302319;stroke:#a9692e;stroke-width:1.5}
+      .bad{fill:#301e2a;stroke:#a94c61;stroke-width:1.5}
+      .muted{fill:#171e2b;stroke:#424b5b;stroke-width:1.5}
+      .conn{fill:none;stroke:#91a4c1;stroke-width:3;marker-end:url(#arrow)}
+      .connOk{fill:none;stroke:#50d8b0;stroke-width:3;marker-end:url(#arrow-green)}
+      .connBad{fill:none;stroke:#ff6f7d;stroke-width:2.5;stroke-dasharray:8 7;marker-end:url(#arrow-red)}
+      .dash{fill:none;stroke:#91a4c1;stroke-width:2.5;stroke-dasharray:8 7}
+      .divider{stroke:#32425a;stroke-width:1}
+    </style>
+  </defs>
+
+  <rect width="1440" height="4500" fill="url(#bg)"/>
+  <rect width="1440" height="4500" fill="url(#dots)"/>
+
+  <!-- Header -->
+  <text x="82" y="78" class="eyebrow">TRANSACTION LIFECYCLE · ORDINARY TRANSFER</text>
+  <text x="78" y="157" class="title">Путь транзакции</text>
+  <text x="82" y="203" class="subtitle">От подписи до ledger: события, развилки, повторы и точки подтверждения</text>
+  <g transform="translate(82 235)">
+    <rect width="263" height="42" rx="21" fill="#201c3e" stroke="#6655c8"/>
+    <circle cx="22" cy="21" r="5" fill="#a78bfa"/>
+    <text x="39" y="27" class="pill" fill="#d8ccff">GENESIS MINT ИСКЛЮЧЁН</text>
+  </g>
+  <g transform="translate(1052 238)">
+    <circle cx="0" cy="0" r="6" fill="#50d8b0"/><text x="15" y="5" class="small">успешный путь</text>
+    <circle cx="153" cy="0" r="6" fill="#ff6f7d"/><text x="168" y="5" class="small">отказ / drop</text>
+    <circle cx="285" cy="0" r="6" fill="#ffc55f"/><text x="300" y="5" class="small">retry / ожидание</text>
+  </g>
+
+  <!-- API -->
+  <rect x="48" y="305" width="1344" height="610" rx="28" class="lane"/>
+  <rect x="48" y="305" width="8" height="610" rx="4" fill="url(#api)"/>
+  <text x="83" y="352" class="stageNum">01 · ПРИЁМ</text>
+  <text x="83" y="383" class="section">API</text>
+  <g filter="url(#shadow)">
+    <rect x="393" y="345" width="654" height="94" rx="18" class="card"/>
+    <text x="421" y="380" class="nodeTitle">Клиент → POST /send/</text>
+    <text x="421" y="411" class="body">TxRead: content + sign · Pydantic проверяет поля, 3 уникальных parents</text>
+    <rect x="393" y="475" width="654" height="106" rx="18" class="card"/>
+    <text x="421" y="512" class="nodeTitle">Проверка подписи и идентификатор</text>
+    <text x="421" y="543" class="body">Ed25519 над SHA-512(content); hash = SHA-512(content + sign)</text>
+    <text x="421" y="567" class="small">Hash — корреляция, не доказательство подтверждения.</text>
+    <rect x="393" y="617" width="654" height="100" rx="18" class="card"/>
+    <text x="421" y="654" class="nodeTitle">Публикация JSON в durable очередь in</text>
+    <text x="421" y="685" class="body">Persistent message · ожидание публикации ограничено 5 секундами</text>
+    <rect x="393" y="755" width="654" height="92" rx="18" class="ok"/>
+    <text x="421" y="791" class="nodeTitle">HTTP success · tx_hash</text>
+    <text x="421" y="821" class="body">Только принято брокером; Consumer и подтверждение впереди</text>
+  </g>
+  <path d="M720 439v34M720 581v36M720 717v38" class="conn"/>
+  <path d="M393 528H306" class="connBad"/>
+  <g><rect x="82" y="480" width="224" height="98" rx="15" class="bad"/><text x="101" y="512" class="branchTitle">Подпись неверна</text><text x="101" y="539" class="branchBody">HTTP 400 · в очередь</text><text x="101" y="559" class="branchBody">ничего не отправлено</text></g>
+  <path d="M1047 664h87" class="connBad"/>
+  <g><rect x="1134" y="611" width="226" height="110" rx="15" class="warn"/><text x="1153" y="644" class="branchTitle">Publish timeout</text><text x="1153" y="672" class="branchBody">HTTP 503 · принятие</text><text x="1153" y="693" class="branchBody">брокером неоднозначно</text></g>
+  <path d="M393 382H306" class="connBad"/>
+  <g><rect x="82" y="339" width="224" height="82" rx="15" class="bad"/><text x="101" y="372" class="branchTitle">Модель невалидна</text><text x="101" y="398" class="branchBody">FastAPI обычно 422</text></g>
+  <path d="M1047 792h87" class="connBad"/>
+  <g><rect x="1134" y="755" width="226" height="79" rx="15" class="bad"/><text x="1153" y="788" class="branchTitle">Иная ошибка</text><text x="1153" y="814" class="branchBody">HTTP 500</text></g>
+
+  <!-- Queue bridge -->
+  <path d="M720 847v78" class="connOk"/>
+  <g transform="translate(624 876)"><rect width="192" height="34" rx="17" fill="#102d2c" stroke="#258c79"/><text x="96" y="23" text-anchor="middle" class="pill" fill="#77e5c3">in · JSON</text></g>
+
+  <!-- Consumer -->
+  <rect x="48" y="930" width="1344" height="1280" rx="28" class="lane"/>
+  <rect x="48" y="930" width="8" height="1280" rx="4" fill="url(#consumer)"/>
+  <text x="83" y="978" class="stageNum">02 · ПРИЁМ И DAG</text>
+  <text x="83" y="1009" class="section">Consumer</text>
+  <g filter="url(#shadow)">
+    <rect x="393" y="965" width="654" height="92" rx="18" class="card"/>
+    <text x="421" y="1001" class="nodeTitle">Decode → JSON → TxStore → hash</text>
+    <text x="421" y="1030" class="body">Rabbit prefetch=1 · одно неподтверждённое сообщение на consumer</text>
+    <rect x="393" y="1090" width="654" height="92" rx="18" class="card"/>
+    <text x="421" y="1126" class="nodeTitle">Есть такой hash в Memgraph?</text>
+    <text x="421" y="1155" class="body">Сначала поиск узла: восстановление после сбоя graph → mid</text>
+    <rect x="393" y="1382" width="654" height="112" rx="18" class="card"/>
+    <text x="421" y="1419" class="nodeTitle">Обычный путь: reserve uniq</text>
+    <text x="421" y="1450" class="body">SET NX uniq:{credit}:{uniq} без TTL → Mongo backstop</text>
+    <text x="421" y="1474" class="small">Уже занят / найден в Mongo → duplicate, terminal drop</text>
+    <rect x="393" y="1530" width="654" height="112" rx="18" class="card"/>
+    <text x="421" y="1567" class="nodeTitle">Средства → родители → rate limit</text>
+    <text x="421" y="1598" class="body">Balance Redis, при miss Mongo · родители: graph или confirmed</text>
+    <text x="421" y="1622" class="small">Rate limiter ждёт слот до записи в граф; сообщение остаётся unacked</text>
+    <rect x="393" y="1680" width="654" height="112" rx="18" class="card"/>
+    <text x="421" y="1717" class="nodeTitle">MERGE узла и CONFIRMS-рёбер</text>
+    <text x="421" y="1748" class="body">Записать time + internal_score · проверить цикл в DAG</text>
+    <text x="421" y="1772" class="small">Confirmed parents не требуют ребра · максимум 3 parents</text>
+    <rect x="393" y="1830" width="654" height="100" rx="18" class="ok"/>
+    <text x="421" y="1868" class="nodeTitle">Опубликовать hash в mid → ACK in</text>
+    <text x="421" y="1898" class="body">Сначала mid, только затем ACK исходного сообщения</text>
+  </g>
+  <path d="M720 1057v33M720 1182v35" class="conn"/>
+  <path d="M720 1494v36M720 1642v38M720 1792v38" class="conn"/>
+  <path d="M720 1182v56H1134v94" class="connOk"/>
+  <path d="M720 1334H306" class="conn"/>
+  <g><rect x="82" y="1284" width="224" height="105" rx="15" class="ok"/><text x="101" y="1317" class="branchTitle">Узел уже есть</text><text x="101" y="1344" class="branchBody">Сверить данные (без time),</text><text x="101" y="1365" class="branchBody">repair edges / cycle</text></g>
+  <path d="M306 1334H350V1880H393" class="connOk"/>
+  <g><rect x="1134" y="1284" width="226" height="105" rx="15" class="card"/><text x="1153" y="1317" class="branchTitle">Recovery</text><text x="1153" y="1344" class="branchBody">Совпало → mid повторно</text><text x="1153" y="1365" class="branchBody">и ACK; без второго узла</text></g>
+  <path d="M393 1630H306" class="connBad"/>
+  <g><rect x="82" y="1550" width="224" height="138" rx="15" class="bad"/><text x="101" y="1583" class="branchTitle">Отказ проверки</text><text x="101" y="1610" class="branchBody">Недостаток средств, parent</text><text x="101" y="1631" class="branchBody">не найден, duplicate</text><text x="101" y="1658" class="branchBody">nack(false) · release uniq*</text></g>
+  <path d="M1047 1137h87" class="connBad"/>
+  <g><rect x="1134" y="1083" width="226" height="118" rx="15" class="bad"/><text x="1153" y="1116" class="branchTitle">Parse error</text><text x="1153" y="1143" class="branchBody">Bad JSON → drop;</text><text x="1153" y="1164" class="branchBody">timeout → requeue;</text><text x="1153" y="1185" class="branchBody">прочее → drop</text></g>
+  <path d="M1047 1410h87" class="connBad"/>
+  <g><rect x="1134" y="1400" width="226" height="110" rx="15" class="bad"/><text x="1153" y="1433" class="branchTitle">Recovery conflict</text><text x="1153" y="1460" class="branchBody">Данные отличаются → drop</text><text x="1153" y="1481" class="branchBody">Repair / publish failed → retry</text></g>
+  <path d="M1047 1734h87" class="connBad"/>
+  <g><rect x="1134" y="1683" width="226" height="111" rx="15" class="bad"/><text x="1153" y="1716" class="branchTitle">Граф / cycle error</text><text x="1153" y="1743" class="branchBody">Обычно nack(false); после</text><text x="1153" y="1764" class="branchBody">частичного MERGE возможен</text><text x="1153" y="1785" class="branchBody">узел без uniq reservation</text></g>
+  <path d="M1047 1880h87" class="connOk"/>
+  <g><rect x="1134" y="1832" width="226" height="94" rx="15" class="warn"/><text x="1153" y="1865" class="branchTitle">mid publish failed</text><text x="1153" y="1892" class="branchBody">nack(true) · recovery loop ↺</text></g>
+  <path d="M477 1930v62H368V1098H393" class="connBad"/>
+  <text x="377" y="1960" class="small" transform="rotate(-90 377 1960)">повторная доставка → recovery</text>
+  <text x="82" y="2168" class="small">* Duplicate reservation не снимается в duplicate-ветке; balance timeout трактуется как 0 и может дать terminal отказ.</text>
+
+  <!-- Confirmer -->
+  <path d="M720 1930v77" class="connOk"/>
+  <g transform="translate(624 1970)"><rect width="192" height="34" rx="17" fill="#10253b" stroke="#267ab6"/><text x="96" y="23" text-anchor="middle" class="pill" fill="#8bd5ff">mid · hash</text></g>
+  <rect x="48" y="2025" width="1344" height="970" rx="28" class="lane"/>
+  <rect x="48" y="2025" width="8" height="970" rx="4" fill="url(#confirmer)"/>
+  <text x="83" y="2073" class="stageNum">03 · ОТБОР КАНДИДАТОВ</text>
+  <text x="83" y="2104" class="section">Confirmer</text>
+  <g filter="url(#shadow)">
+    <rect x="393" y="2062" width="654" height="94" rx="18" class="card"/>
+    <text x="421" y="2098" class="nodeTitle">Проверить hash → загрузить snapshot DAG</text>
+    <text x="421" y="2128" class="body">128 lowercase hex · все Transaction nodes одним Cypher query</text>
+    <rect x="393" y="2190" width="654" height="112" rx="18" class="card"/>
+    <text x="421" y="2227" class="nodeTitle">От trigger вверх: BFS предков</text>
+    <text x="421" y="2258" class="body">Trigger исключён · уникальные ancestors · MAX_DEPTH сейчас без лимита</text>
+    <text x="421" y="2282" class="small">Нет trigger / нет предков → ACK mid без публикации</text>
+    <rect x="393" y="2337" width="654" height="112" rx="18" class="card"/>
+    <text x="421" y="2374" class="nodeTitle">Для каждого предка: DFS score вниз</text>
+    <text x="421" y="2405" class="body">score(t) = internal_score(t) + Σ score(child) / 3</text>
+    <text x="421" y="2429" class="small">Memoized · учитываются все ветви поддерева · cycle → ошибка</text>
+    <rect x="393" y="2485" width="654" height="100" rx="18" class="card"/>
+    <text x="421" y="2523" class="nodeTitle">Score ≥ 1.0 ?</text>
+    <text x="421" y="2553" class="body">Да → кандидат; ниже порога → пропуск</text>
+    <rect x="393" y="2620" width="654" height="112" rx="18" class="card"/>
+    <text x="421" y="2657" class="nodeTitle">queued:{hash} · ownership lease</text>
+    <text x="421" y="2688" class="body">SET NX token · TTL 30s · занято: ждать 0.5s, максимум 60s</text>
+    <text x="421" y="2712" class="small">Получен lease → publish hash в out; ошибка → снять свой token</text>
+    <rect x="393" y="2790" width="654" height="92" rx="18" class="ok"/>
+    <text x="421" y="2826" class="nodeTitle">Все кандидаты обработаны → ACK mid</text>
+    <text x="421" y="2856" class="body">Каждый кандидат публикуется отдельно; публикация не атомарна</text>
+  </g>
+  <path d="M720 2156v34M720 2302v35M720 2449v36M720 2585v35M720 2732v58" class="conn"/>
+  <path d="M1047 2109h87" class="connBad"/>
+  <g><rect x="1134" y="2059" width="226" height="106" rx="15" class="bad"/><text x="1153" y="2092" class="branchTitle">Invalid snapshot</text><text x="1153" y="2119" class="branchBody">Score / edge invalid →</text><text x="1153" y="2140" class="branchBody">nack(false), без out</text></g>
+  <path d="M1047 2394h87" class="connBad"/>
+  <g><rect x="1134" y="2345" width="226" height="108" rx="15" class="bad"/><text x="1153" y="2378" class="branchTitle">Cycle в графе</text><text x="1153" y="2405" class="branchBody">Невалидный score; частичной</text><text x="1153" y="2426" class="branchBody">публикации не будет → drop</text></g>
+  <path d="M1047 2675h87" class="connBad"/>
+  <g><rect x="1134" y="2627" width="226" height="108" rx="15" class="warn"/><text x="1153" y="2660" class="branchTitle">Lease / publish error</text><text x="1153" y="2687" class="branchBody">Освободить свой token;</text><text x="1153" y="2708" class="branchBody">nack(true) mid → пересчёт</text></g>
+  <path d="M1047 2840h87" class="connOk"/>
+  <g><rect x="1134" y="2795" width="226" height="89" rx="15" class="ok"/><text x="1153" y="2828" class="branchTitle">out · hash</text><text x="1153" y="2855" class="branchBody">кандидат для Writer</text></g>
+  <path d="M500 2790v-57H354V2198H393" class="dash"/>
+  <text x="362" y="2550" class="small" transform="rotate(-90 362 2550)">частичный out → retry mid; queued дедуплицирует</text>
+
+  <!-- Writer -->
+  <path d="M720 2882v100" class="connOk"/>
+  <g transform="translate(624 2930)"><rect width="192" height="34" rx="17" fill="#322516" stroke="#bd7a24"/><text x="96" y="23" text-anchor="middle" class="pill" fill="#ffd17d">out · hash</text></g>
+  <rect x="48" y="3005" width="1344" height="1120" rx="28" class="lane"/>
+  <rect x="48" y="3005" width="8" height="1120" rx="4" fill="url(#writer)"/>
+  <text x="83" y="3053" class="stageNum">04 · ПОДТВЕРЖДЕНИЕ И LEDGER</text>
+  <text x="83" y="3084" class="section">Writer</text>
+  <g filter="url(#shadow)">
+    <rect x="393" y="3040" width="654" height="102" rx="18" class="card"/>
+    <text x="421" y="3077" class="nodeTitle">Pool guard: в графе больше 3 транзакций?</text>
+    <text x="421" y="3108" class="body">Если нет — queued очищается, candidate получает retry</text>
+    <rect x="393" y="3175" width="654" height="104" rx="18" class="card"/>
+    <text x="421" y="3212" class="nodeTitle">Lock writer:{hash} · проверить confirmed</text>
+    <text x="421" y="3243" class="body">Уже confirmed → завершить tail без повторного списания</text>
+    <rect x="393" y="3312" width="654" height="108" rx="18" class="card"/>
+    <text x="421" y="3349" class="nodeTitle">Узел есть? · классифицировать родителей</text>
+    <text x="421" y="3380" class="body">sentinel / Mongo / confirmed = ok · графовый parent = pending</text>
+    <text x="421" y="3404" class="small">Нет нигде = dead · dead имеет приоритет над pending</text>
+    <rect x="393" y="3480" width="654" height="104" rx="18" class="card"/>
+    <text x="421" y="3517" class="nodeTitle">Все родители готовы → проверить balance</text>
+    <text x="421" y="3548" class="body">Недостаточно средств → kill subtree и ACK</text>
+    <rect x="393" y="3642" width="654" height="124" rx="18" class="card"/>
+    <text x="421" y="3679" class="nodeTitle">MongoDB insert → Redis pipeline</text>
+    <text x="421" y="3710" class="body">Ledger insert · INCRBY получателя · DECRBY отправителя</text>
+    <text x="421" y="3734" class="small">SET confirmed:{hash} EX 360 · Mongo — источник истины</text>
+    <rect x="393" y="3825" width="654" height="116" rx="18" class="card"/>
+    <text x="421" y="3862" class="nodeTitle">Tail: перепубликовать deferred children</text>
+    <text x="421" y="3893" class="body">Затем удалить graph node → снять queued token → ACK out</text>
+    <text x="421" y="3917" class="small">При сбое tail confirmed marker позволяет повторить завершение</text>
+    <rect x="393" y="4005" width="654" height="96" rx="18" class="ok"/>
+    <text x="421" y="4043" class="nodeTitle">Транзакция подтверждена ✓</text>
+    <text x="421" y="4074" class="body">Mongo ledger + Redis balance cache + DAG cleanup</text>
+  </g>
+  <path d="M720 3142v33M720 3279v33M720 3420v60M720 3584v58M720 3766v59M720 3941v64" class="conn"/>
+  <path d="M1047 3092h87" class="connBad"/>
+  <g><rect x="1134" y="3045" width="226" height="109" rx="15" class="warn"/><text x="1153" y="3078" class="branchTitle">Pool ≤ 3</text><text x="1153" y="3105" class="branchBody">Фактически nack(true)</text><text x="1153" y="3126" class="branchBody">→ активный requeue-loop</text></g>
+  <path d="M1047 3367h87" class="connBad"/>
+  <g><rect x="1134" y="3318" width="226" height="111" rx="15" class="bad"/><text x="1153" y="3351" class="branchTitle">Нет узла / dead parent</text><text x="1153" y="3378" class="branchBody">Устарело → ACK; dead →</text><text x="1153" y="3399" class="branchBody">kill subtree → ACK</text></g>
+  <path d="M393 3532H306" class="conn"/>
+  <g><rect x="82" y="3474" width="224" height="113" rx="15" class="warn"/><text x="101" y="3507" class="branchTitle">Parent pending</text><text x="101" y="3534" class="branchBody">deferred без TTL, queued</text><text x="101" y="3555" class="branchBody">снят, ACK; ждём parent</text></g>
+  <path d="M306 3532H356V3877H393" class="connOk"/>
+  <path d="M1047 3532h87" class="connBad"/>
+  <g><rect x="1134" y="3474" width="226" height="113" rx="15" class="bad"/><text x="1153" y="3507" class="branchTitle">Balance недостаточен</text><text x="1153" y="3534" class="branchBody">Kill subtree → ACK</text><text x="1153" y="3555" class="branchBody">Timeout может стать 0</text></g>
+  <path d="M1047 3700h87" class="connBad"/>
+  <g><rect x="1134" y="3647" width="226" height="118" rx="15" class="warn"/><text x="1153" y="3680" class="branchTitle">Commit / retry error</text><text x="1153" y="3707" class="branchBody">Mongo duplicate → tail;</text><text x="1153" y="3728" class="branchBody">Redis failure → compensate</text><text x="1153" y="3749" class="branchBody">best-effort, затем requeue</text></g>
+  <path d="M1047 3880h87" class="connBad"/>
+  <g><rect x="1134" y="3825" width="226" height="119" rx="15" class="warn"/><text x="1153" y="3858" class="branchTitle">Tail publish / delete error</text><text x="1153" y="3885" class="branchBody">Parent requeue; confirmed</text><text x="1153" y="3906" class="branchBody">остаётся для повторного tail</text><text x="1153" y="3927" class="branchBody">Cleanup error может теряться</text></g>
+  <path d="M393 3092H342V3227H393" class="connBad"/>
+  <text x="331" y="3192" class="small" transform="rotate(-90 331 3192)">requeue same out</text>
+
+  <!-- Footer -->
+  <line x1="82" y1="4164" x2="1358" y2="4164" class="divider"/>
+  <text x="82" y="4207" class="eyebrow">КАК ЧИТАТЬ</text>
+  <text x="82" y="4244" class="foot">Сплошная линия — основной переход · пунктир — ветка ошибки или повторной доставки · цветные карточки — исход проверки.</text>
+  <text x="82" y="4282" class="foot">Очереди: in = подписанное JSON · mid = hash узла в DAG · out = hash кандидата на подтверждение.</text>
+  <text x="82" y="4320" class="foot">Полная детализация исключений, Redis keys, ACK/NACK и найденных рисков: .docs/transaction-lifecycle.md</text>
+  <text x="82" y="4374" class="small">Схема отражает текущую реализацию; предупреждения показывают места, где сообщение может быть потеряно, повторяться или рассинхронизировать состояние.</text>
+  <g transform="translate(1262 4350)"><circle r="25" fill="#18243a" stroke="#394b67"/><text y="7" text-anchor="middle" class="nodeTitle" font-size="19">↻</text></g>
+</svg>
