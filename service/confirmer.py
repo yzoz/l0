@@ -183,9 +183,10 @@ class ConfirmationProcessor:
         metrics.observe("score", score)
 
         if score < SCORE_THRESHOLD:
-            logger.debug(f"parent {parent_hash[:8]} score={score:.4f} < {SCORE_THRESHOLD}, skip")
+            logger.info(f"parent {parent_hash[:8]} score={score:.4f} < {SCORE_THRESHOLD}, skip")
             return
 
+        logger.info(f"parent {parent_hash[:8]} score={score:.4f} > {SCORE_THRESHOLD}, out")
         # score >= 1 — кандидат готов к подтверждению. Ставим в out с
         # дедупликацией по queued-маркеру (ожидаем освобождения маркера до
         # QUEUED_WAIT; если не дождались — PublishError → requeue события).
@@ -226,6 +227,10 @@ class ConfirmationProcessor:
         потомки по ребрам CONFIRMS (OPTIONAL MATCH без глубины).
         """
         async with self.dag.driver.session() as session:
+            # Получение всех узлов (только число — без полного обхода данных)
+            result = await session.run("MATCH (t:Transaction) RETURN count(t) AS total")
+            record = await result.single()
+            logger.info("Nodes: %s", record["total"])
             result = await session.run(
                 """
                 MATCH (p:Transaction {hash: $hash})

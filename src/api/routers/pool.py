@@ -35,10 +35,10 @@ async def pool(memgraph=Depends(get_memgraph)):
             """
             MATCH (t:Transaction)
             RETURN t.hash
-            ORDER BY t.internal_score DESC
-            LIMIT $limit
+            // ORDER BY t.internal_score DESC
+            // LIMIT $limit
             """,
-            limit=PARENTS + P,
+            # limit=0,
         )
         parents = [record["t.hash"] async for record in result]
 

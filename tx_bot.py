@@ -18,8 +18,10 @@ from src.utils.data import ordered_sum
 from src.config import DEV_ADDR
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(process)d - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(process)d - %(levelname)s - %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("httpcore").setLevel(logging.ERROR)
 
 start = time.time()
 
@@ -31,7 +33,7 @@ async def arange(count):
     """Генератор для асинхронного перебора чисел."""
     for i in range(count):
         yield i
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(1)
         # if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 2.5), 3))
         # if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 5), 3))
         # await asyncio.sleep(round(random.uniform(0.01, 0.05), 3))
@@ -56,16 +58,22 @@ async def send(t, client):
         else:
             c = pk[i]  # credit (отправитель)
             priv = sk[i]  # приватный ключ
+        a = random.randint(1, 1_000) #сумма
+        if j % 5 == 0:
+            a = random.randint(1_000, 5_000)
+        if j % 25 == 0:
+            a = random.randint(5_000, 25_000)
+        if j % 100 == 0:
+            a = random.randint(25_000, 100_000)
         d = pk[random.randint(0, n)]  # debit (получатель)
-        a = random.randint(1, 1000000000)  # сумма
         u = str(uuid.uuid4())  # уникальный идентификатор
         m = str(random.randint(0, 100000))  # сообщение
         try:
             # p = await client.get('http://192.168.1.8:8000/pool')
-            p = await client.get("http://localhost:8000/pool")
-            r = p.json()
+            r = await client.get("http://localhost:8000/pool")
+            p = r.json()
             # Формируем транзакцию
-            tx = dict(parents=r, debit=d, credit=c, amount=a, uniq=u, msg=m)
+            tx = dict(parents=p, debit=d, credit=c, amount=a, uniq=u, msg=m)
             m = ordered_sum(tx)  # строка для подписи
             # Подпись транзакции
             s = sign_message(priv, m)
@@ -79,6 +87,9 @@ async def send(t, client):
             metrics.inc("sent")
             metrics.observe("latency_ms", elapsed_ms)
             short = u[:8]
+            sp = ""
+            for _p in p:
+                sp += " " + _p[:8]
             if r.status_code < 400:
                 metrics.inc("ok")
                 metrics.event("ok", "send", f"{short} {r.status_code} {fmt_ms(elapsed_ms)}", ref=u, key=f"ok:{u}")
@@ -94,7 +105,7 @@ async def send(t, client):
             if VERBOSE:
                 logger.info(f"Response: {r.text}")
             else:
-                logger.info("tx %s -> %s %s", short, r.status_code, fmt_ms(elapsed_ms))
+                logger.info("tx %s (%s) [%s] -> %s %s", short, a, sp, r.status_code, fmt_ms(elapsed_ms))
         except Exception as e:
             metrics.inc("err")
             metrics.event("error", "send", f"{u[:8]} запрос не удался: {type(e).__name__}", ref=u, key=f"exc:{u}")

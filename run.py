@@ -7,7 +7,7 @@ from watchfiles import Change, awatch, PythonFilter
 
 from src.telemetry import metrics, start_dumper
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 SERVICE_TYPES = ("cons", "conf", "write")

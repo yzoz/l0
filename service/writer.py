@@ -110,7 +110,8 @@ class WriterProcessor:
             return
 
         try:
-            outcome = await self.process_candidate(tx_hash)
+            logger.info(f"{tx_hash[:8]} going to process")
+            outcome = await self.process_candidate(tx_hash)        
         except PublishError as e:
             # Временная ошибка публикации (requeue deferred-детей). Узел ещё в
             # графе, маркер queued остаётся — повторная доставка добьёт «хвост».
@@ -165,7 +166,7 @@ class WriterProcessor:
             await clear_queued(self.redis, tx_hash)
             metrics.inc("dropped")
             metrics.event("info", "drop", f"{short} отброшен: пул <= {PARENTS}", ref=tx_hash, key=f"drop:{tx_hash}")
-            return "ack"
+            return "retry"
 
         async with self.dag.driver.session() as session:
             # Идемпотентность: одна обработка кандидата за раз.
@@ -182,7 +183,7 @@ class WriterProcessor:
                 # обработан и удалён (мёртвый/дубликат), событие устарело.
                 data = await self._fetch_node_data(session, tx_hash)
                 if data is None:
-                    logger.debug(f"{short} not in graph, ack and clear marker")
+                    logger.info(f"{short} not in graph, ack and clear marker")
                     await clear_queued(self.redis, tx_hash)
                     return "ack"
 
@@ -200,6 +201,7 @@ class WriterProcessor:
                         ref=tx_hash,
                         key=f"parent-dead:{tx_hash}",
                     )
+                    logger.info(f"{short} мёртвый родитель — каскадное удаление")
                     await self._kill_subtree(session, tx_hash)
                     await clear_queued(self.redis, tx_hash)
                     return "ack"
@@ -215,6 +217,7 @@ class WriterProcessor:
                     metrics.event(
                         "info", "defer", f"{short} отложен до родителя", ref=tx_hash, key=f"defer:{tx_hash}"
                     )
+                    logger.info(f"{short} отложен до родителя")
                     return "ack"
 
                 # Родители подтверждены — пометка ожидания больше не нужна.
@@ -234,6 +237,7 @@ class WriterProcessor:
                             ref=tx_hash,
                             key=f"funds:{tx_hash}",
                         )
+                        logger.info(f"{short} недостаточно средств")
                         await self._kill_subtree(session, tx_hash)
                         await clear_queued(self.redis, tx_hash)
                         return "ack"
@@ -321,7 +325,7 @@ class WriterProcessor:
             metrics.inc("insert_errors")
             metrics.event("error", "insert", f"{tx.hash[:8]} ошибка записи", ref=tx.hash, key=f"insert:{tx.hash}")
             return "failed"
-        logger.info("Confirmed TX saved: %s", tx.hash)
+        logger.info("%s confirmed & saved: ", tx.hash[:8])
 
         # 2. Redis — маркер подтверждения; для перевода дополнительно обновляются
         # балансы. Минт balance:* не трогает — его pre-load уже установлен genesis.
