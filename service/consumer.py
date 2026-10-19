@@ -39,7 +39,8 @@ from aio_pika import IncomingMessage
 from neo4j.exceptions import Neo4jError, TransientError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from src.config import IN_QUEUE, MID_QUEUE
+from service.ratelimit import RateLimiter
+from src.config import IN_QUEUE, MID_QUEUE, RATE_LIMIT_TPS
 from src.database.graph import Memgraph
 from src.database.mongodb import MongoDB
 from src.database.queues import PublishError, RabbitMQ
@@ -56,11 +57,12 @@ logger = logging.getLogger(__name__)
 class ConsumerProcessor:
     """Обработка сообщений очереди in и запись транзакций в граф."""
 
-    def __init__(self, rabbit: RabbitMQ, db: MongoDB, redis: Redis, dag: Memgraph):
+    def __init__(self, rabbit: RabbitMQ, db: MongoDB, redis: Redis, dag: Memgraph, limiter: RateLimiter):
         self.db = db
         self.rabbit = rabbit
         self.redis = redis
         self.dag = dag
+        self.limiter = limiter
 
     async def process_message(self, message: IncomingMessage) -> None:
         """Обрабатывает входящее сообщение из очереди in.
@@ -213,6 +215,11 @@ class ConsumerProcessor:
                     return
 
                 # Шаг 4. Запись узла и рёбер в граф.
+                # Rate limit: ждём слот ПЕРЕД записью. Пока ждём — сообщение не
+                # взято из брокера, очередь in растёт (backpressure). Слот берём
+                # только на пути реальной вставки, не на ретраях/отказах.
+                wait = await self.limiter.acquire()
+                metrics.observe("rl_wait", wait)
                 if not await self.add_to_graph(tx_hash, tx):
                     #LOGGING: терминальный отказ — ошибка записи в граф или цикл, сообщение исключается.
                     # Для timeseries DB фиксируется событие:
@@ -404,7 +411,7 @@ class ConsumerProcessor:
                 )
                 record = await result.single()
                 if not record:
-                    logger.info(f"Parent transaction {parent_hash} not found for {tx_hash} in Graph")
+                    logger.info(f"{tx_hash[:8]} parent transaction {parent_hash[:8]} not found in graph")
                     # Проверка подтверждения родителя в Redis
                     confirmed_key = f"confirmed:{parent_hash}"
                     if not await self.redis.client.exists(confirmed_key):
@@ -533,7 +540,8 @@ class ConsumerService:
         self.rabbit = RabbitMQ()
         self.redis = Redis()
         self.dag = Memgraph()
-        self.processor = ConsumerProcessor(self.rabbit, self.db, self.redis, self.dag)
+        self.limiter = RateLimiter(RATE_LIMIT_TPS)
+        self.processor = ConsumerProcessor(self.rabbit, self.db, self.redis, self.dag, self.limiter)
         self.running = False
 
     async def run(self, stop_event=None) -> None:

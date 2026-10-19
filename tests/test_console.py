@@ -5,6 +5,7 @@ import socket
 
 import pytest
 
+from service.ratelimit import RateLimiter
 from src.console import health
 from src.console.metrics import Metrics, get_metrics
 from src.console.middleware import MetricsMiddleware, status_class
@@ -374,7 +375,7 @@ async def test_consumer_counts_events():
     redis.client.lock = MagicMock()
     redis.client.lock.return_value.__aenter__ = AsyncMock()
     redis.client.lock.return_value.__aexit__ = AsyncMock()
-    processor = ConsumerProcessor(rabbit, db, redis, dag)
+    processor = ConsumerProcessor(rabbit, db, redis, dag, RateLimiter(100))
     processor._fetch_graph_data = AsyncMock(return_value=None)
     processor.check_duplicate = AsyncMock(return_value=True)
 
@@ -404,7 +405,7 @@ async def test_consumer_bad_format_counts():
     m = get_metrics()
     rabbit = MagicMock()
     rabbit.publish_message = AsyncMock()
-    processor = ConsumerProcessor(rabbit, MagicMock(), MagicMock(), MagicMock())
+    processor = ConsumerProcessor(rabbit, MagicMock(), MagicMock(), MagicMock(), RateLimiter(100))
     message = MagicMock()
     message.body = b"not-json"
     message.nack = AsyncMock()

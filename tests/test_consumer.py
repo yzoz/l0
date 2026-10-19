@@ -10,6 +10,7 @@ import pytest
 from aio_pika import IncomingMessage
 
 from service.consumer import ConsumerProcessor, ConsumerService
+from service.ratelimit import RateLimiter
 from src.database.graph import Memgraph
 from src.database.mongodb import MongoDB
 from src.database.queues import RabbitMQ
@@ -68,7 +69,7 @@ def processor():
     redis.client.lock = lock
     redis.client.set = AsyncMock(return_value=True)
     redis.client.delete = AsyncMock()
-    return ConsumerProcessor(rabbitmq, db, redis, dag)
+    return ConsumerProcessor(rabbitmq, db, redis, dag, RateLimiter(100))
 
 
 # Тесты для ConsumerProcessor

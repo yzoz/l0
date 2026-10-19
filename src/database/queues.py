@@ -70,7 +70,9 @@ class RabbitMQ:
         """
         self.connection = await connect_robust("amqp://guest:guest@localhost/")
         self.channel = await self.connection.channel()
-        # await self.rabbitmq.channel.set_qos(prefetch_count=1)
+        # prefetch=1: брокер отдаёт следующее сообщение только после ack предыдущего —
+        # реальный backpressure, иначе очередь копится в RAM клиента.
+        await self.channel.set_qos(prefetch_count=1)
         for queue_name in (IN_QUEUE, MID_QUEUE, OUT_QUEUE):
             await self.channel.declare_queue(queue_name, durable=True)
 

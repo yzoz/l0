@@ -1,5 +1,5 @@
-alpha = 0.01
-beta  = 0.5
+alpha = 0.033
+beta  = 0.33
 
 def transfer_score(x, alpha, beta):
     """
@@ -8,7 +8,7 @@ def transfer_score(x, alpha, beta):
     """
     return 1 - (1 + alpha * x) ** (-beta)
 
-for x in range(1, 1000, 100):
+for x in range(1, 1000000, 100000):
     print(transfer_score(x, alpha, beta), x)
 
 '''
