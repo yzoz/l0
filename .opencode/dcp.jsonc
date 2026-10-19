@@ -1,0 +1,52 @@
+{
+    "$schema": "https://raw.githubusercontent.com/Opencode-DCP/opencode-dynamic-context-pruning/master/dcp.schema.json",
+    
+    // Основной переключатель
+    "enabled": true,
+    "debug": false,
+
+    // Уведомления: "off", "minimal", "detailed"
+    "pruneNotification": "detailed",
+    // Способ уведомления: рекомендуется "chat", чтобы избежать проблем совместимости с "toast" в некоторых средах
+    "pruneNotificationType": "chat",
+
+    // Защита: сколько ходов защищать вывод инструментов
+    "turnProtection": {
+        "enabled": true,
+        "turns": 5
+    },
+
+    // Защита: glob-паттерны файлов, которые никогда не обрезаются
+    "protectedFilePatterns": [
+        "**/*.important.ts",
+        "**/config/*.json"
+    ],
+
+    // Настройки, связанные со сжатием контекста (ключевые лимиты)
+    "compress": {
+        // Верхний порог: при превышении этого значения чаще запрашивается сжатие
+        "maxContextLimit": 100000,
+        // Нижний порог: ниже этого значения напоминания отключаются
+        "minContextLimit": 50000,
+        // Режим сжатия: "range" (сжатие диапазона) или "message" (сжатие отдельных сообщений)
+        "mode": "range",
+        "permission": "allow"
+    },
+
+    // Автоматические стратегии
+    "strategies": {
+        // Дедупликация: удаление дублирующихся вызовов инструментов
+        "deduplication": {
+            "enabled": true
+        },
+        // Очистка ошибок: удаление входных данных инструментов, завершившихся ошибкой, по истечении N ходов
+        "purgeErrors": {
+            "enabled": true,
+            "turns": 5
+        },
+        // Перезапись записи: если файл после записи был прочитан, удалить содержимое записи
+        "supersedeWrites": {
+            "enabled": false
+        }
+    }
+}

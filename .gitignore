@@ -5,7 +5,7 @@ env
 .venv
 lib
 __pycache__
-.opencode
+.opencode/index
 .env
 .env.*
 !.env.example

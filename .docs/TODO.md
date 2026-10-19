@@ -14,6 +14,7 @@ TransientError в memgraph
 чекнуть все self.redis.client.lock - многопоточность, асинхронность
 у меня есть такая самописная реализация src/utils/lock.py
 
+привести в порядок и идиный стиль все logging.info - синхронизировать их с metrics.event() и в будущем с influx
 
 у меня по коду в vscode очень много подобных ошибок: var is not a known attribute of "None" PylancereportOptionalMemberAccess
 я понимаю суть и предлагаются подобные движухи:
