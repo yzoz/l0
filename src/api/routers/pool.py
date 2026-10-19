@@ -36,12 +36,12 @@ async def pool(memgraph=Depends(get_memgraph)):
             MATCH (t:Transaction)
             RETURN t.hash
             ORDER BY t.internal_score DESC
-            LIMIT $limit
+            // LIMIT $limit
             """,
-            limit=PARENTS,
+            # limit=PARENTS,
         )
         parents = [record["t.hash"] async for record in result]
 
         # Перемешивание и выбор первых PARENTS родителей
-        # random.shuffle(parents)
-        return parents
+        random.shuffle(parents)
+        return parents[:PARENTS]

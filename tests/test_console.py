@@ -448,11 +448,11 @@ async def test_writer_duplicate_counts():
     assert events and "дубликат" in events[-1]["text"]
 
 
-async def test_confirmer_scores_parents_from_graph():
-    """Confirmer: событие mid пересчитывает score трёх родителей через один Cypher, score>=1 уходит в out."""
+async def test_confirmer_scores_ancestors_from_graph():
+    """Confirmer: событие mid пересчитывает score предков по одному пакетному Cypher; score>=1 уходит в out."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from service.confirmer import ConfirmationProcessor, candidate_score
+    from service.confirmer import ConfirmationProcessor, compute_scores, find_ancestors
 
     m = get_metrics()
 
@@ -473,17 +473,18 @@ async def test_confirmer_scores_parents_from_graph():
             except StopIteration as err:
                 raise StopAsyncIteration from err
 
-    # Родитель internal_score=0.86 и один ребёнок internal_score=0.80:
-    # score = 0.86 + 0.80/3 ≈ 1.13 >= 1.
+    # Граф: предки p1,p2,p3 -> T. p1: 0.86 + T/3 (T=0.80) ≈ 1.13 >= 1.
+    T, p1, p2, p3 = "a" * 128, "b" * 128, "c" * 128, "d" * 128
+    records = [
+        {"hash": T, "score": 0.80, "children": []},
+        {"hash": p1, "score": 0.86, "children": [T]},
+        {"hash": p2, "score": 0.10, "children": [T]},
+        {"hash": p3, "score": 0.10, "children": [T]},
+    ]
+
     class FakeSession:
         async def run(self, query, **params):
-            if "RETURN t.data" in query:
-                return FakeResult([{"data": {"parents": ["p1", "p2", "p3"], "amount": 50000}}])
-            if "internal_score" in query and "children_scores" in query:
-                return FakeResult(
-                    [{"parent_score": 0.86, "children_scores": [0.80]}]
-                )
-            return FakeResult([])
+            return FakeResult(records)
 
         async def __aenter__(self):
             return self
@@ -506,18 +507,26 @@ async def test_confirmer_scores_parents_from_graph():
 
     processor = ConfirmationProcessor(redis, FakeDag(), rabbit)
     message = MagicMock()
-    message.body = ("a" * 128).encode()
+    message.body = T.encode()
     message.ack = AsyncMock()
     message.nack = AsyncMock()
     await processor.process_event(message)
 
     message.ack.assert_called_once()
     assert m.counter("events") == 1
-    assert m.counter("scored") == 3  # три родителя оценены
+    assert m.counter("scored") == 3  # три предка оценены
     assert m.counter("enqueued") >= 1  # хотя бы один кандидат прошёл порог
 
-    # Проверка формулы score напрямую (candidate_score — чистая арифметика).
-    score = candidate_score(0.86, [0.80])
-    assert score >= 1.0
-    # Без детей — score = parent_internal, всегда меньше порога (transfer_score < 1).
-    assert candidate_score(0.99, []) < 1.0
+    # Проверка формул напрямую (чистая арифметика).
+    internal = {T: 0.80, p1: 0.86, p2: 0.10, p3: 0.10}
+    children = {T: [], p1: [T], p2: [T], p3: [T]}
+    parents = {h: [] for h in internal}
+    for parent, kids in children.items():
+        for child in kids:
+            parents[child].append(parent)
+    ancestors = find_ancestors(T, parents, None)
+    assert set(ancestors) == {p1, p2, p3}  # триггер исключён
+    scores = compute_scores(internal, children, ancestors.keys())
+    assert scores[p1] == pytest.approx(0.86 + 0.80 / 3)
+    assert scores[p1] >= 1.0
+    assert scores[p2] < 1.0

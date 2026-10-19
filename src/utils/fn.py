@@ -1,4 +1,4 @@
-alpha = 0.005
+alpha = 0.01
 beta  = 0.5
 
 def transfer_score(x, alpha, beta):

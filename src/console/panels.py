@@ -211,7 +211,7 @@ def build_conf_panel(
 ) -> PanelData:
     """Панель confirmer: событийная обработка mid и публикация кандидатов в out.
 
-    Никаких весов/глубин: score считается в памяти по прямым детям и не хранится.
+    score пересчитывается в памяти рекурсивно по поддеревьям и не хранится.
     """
     events = _counter(snap, "events")
     prev_events = _counter(prev, "events") if prev else None
@@ -225,7 +225,7 @@ def build_conf_panel(
         f"не найдено {fmt_int(_counter(snap, 'not_found'))}",
         f"score min {fmt_float(obs.get('min'))} · avg {fmt_float(avg_score)} · max {fmt_float(obs.get('max'))}",
         f"ошибки {fmt_int(_counter(snap, 'errors'))} · битый формат {fmt_int(_counter(snap, 'bad_format'))}",
-        "формула: transfer_score(own) + Σ transfer_score(child)/3 · порог score ≥ 1",
+        "формула: score = transfer_score(own) + Σ score(child)/3 · рекурсивно · порог ≥ 1",
     ]
     return PanelData(
         title=TITLES["conf"],

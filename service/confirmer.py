@@ -1,36 +1,38 @@
 """Confirmer — вторая ступень пайплайна.
 
-LIFECYCLE ТРАНЗАКЦИИ (см. .docs/TODO_003.md):
+LIFECYCLE ТРАНЗАКЦИИ (см. .docs/TODO_004.md):
 
     consumer --mid(plain-text tx_hash)--> confirmer --out(tx_hash кандидата)--> writer
 
 Confirmer обрабатывает СОБЫТИЯ, а не сканирует пул. На каждое событие mid
-(новая транзакция, записанная в граф) пересчитывается score только ТРЁХ
-родителей этой транзакции — новые данные (новый прямой ребёнок) меняют score
-именно родителей.
+(новая транзакция, записанная в граф) пересчитывается score предков этой
+транзакции — новые данные меняют score всех, до кого доходит вклад нового узла.
 
 ФОРМУЛА SCORE (транзакции t):
 
-    score(t) = internal_score(t) + SUM( internal_score(child) / 3 )
-      по прямым детям t (ребра CONFIRMS).
+    score(t) = internal_score(t) + SUM( score(child) / 3 )
+      по всем непосредственным детям t (ребра CONFIRMS), рекурсивно по поддереву.
 
 ``internal_score = transfer_score(amount)`` precomputed consumer'ом при вставке
 узла и сохранён в графе (см. service/consumer.py). Confirmer НЕ вызывает
-transfer_score — только суммирует и делит. Весь расчёт — один Cypher-запрос.
+transfer_score — только суммирует и делит.
 
 * Вклад каждого ребёнка делится на фиксированную константу 3 — число родителей
   транзакции (PARENTS=3). НЕ на config-значение, а на литерал 3.
-* Внуки и более дальние потомки НЕ участвуют: никакого затухания по глубине.
+* Учитываются все ветви поддерева, а не только ведущая к триггеру.
 * Порог: score >= 1.0.
 * Score НИГДЕ не сохраняется — он вычисляется из internal_score при каждом
   событии.
-* Собственная оценка новой транзакции не требуется: transfer_score по формуле
-  всегда < 1 (стремится к 1 при x → ∞), поэтому транзакция без детей не может
-  пройти порог. Оцениваются только родители.
+
+АЛГОРИТМ. На событие — один пакетный Cypher-запрос всей топологии графа
+(узлы, internal_score, рёбра CONFIRMS). Предки триггера ищутся BFS вверх
+(обратно по ребрам) с ограничением MAX_DEPTH. Score считается итеративным
+memoized DFS снизу вверх (без рекурсивных вызовов Python) по поддеревьям
+кандидатов. Сложность O(V + E). В Memgraph ничего не пишется.
 
 ДЕДУПЛИКАЦИЯ OUT: публикация кандидата идёт через enqueue_candidate, который
 ставит Redis-маркер ``queued:{hash}`` (SET NX + аренда). Повторные события для
-одного родителя не создают дублей в очереди out.
+одного кандидата не создают дублей в очереди out.
 """
 
 import logging
@@ -53,29 +55,83 @@ SCORE_THRESHOLD = 1.0
 # score родителя делится ровно на 3. Связано с PARENTS=3 в src/config.py.
 CHILD_DIVISOR = 3
 
+# Глубина подъёма от триггера к кандидатам. None — без ограничения (до корней).
+# Ограничивает ТОЛЬКО поиск предков; score кандидата всегда считается по всему
+# его поддереву.
+MAX_DEPTH: int | None = None
+
 # tx_hash — 128 hex-символов sha512 (см. src/utils/data.py).
 _HASH_RE = re.compile(r"^[0-9a-f]{128}$")
 
 
-def candidate_score(parent_internal: float, children_internal: list[float]) -> float:
-    """Score родителя: его internal_score плюс вклад прямых детей.
+def find_ancestors(
+    trigger: str, parents: dict[str, list[str]], max_depth: int | None
+) -> dict[str, int]:
+    """Возвращает предков ``trigger`` (hash -> глубина) по родительским связям.
 
-    score = parent.internal_score
-          + SUM( child.internal_score / CHILD_DIVISOR )
-
-    ``internal_score`` — precomputed ``transfer_score(amount)``, записанный
-    consumer'ом при вставке узла. Confirmer не вызывает формулу — только
-    суммирует и делит. Прямые дети — только непосредственные потомки по
-    ребрам CONFIRMS. Больше ни один уровень глубины не учитывается.
+    depth 1 — прямые родители, 2 — их родители и т.д. ``max_depth=None`` —
+    без ограничения. При нескольких путях узел берётся один раз по кратчайшему
+    пути (BFS). Триггер в результат не входит.
     """
-    score = parent_internal
-    for child_score in children_internal:
-        score += child_score / CHILD_DIVISOR
-    return score
+    found: dict[str, int] = {}
+    frontier = [trigger]
+    depth = 0
+    while frontier:
+        depth += 1
+        if max_depth is not None and depth > max_depth:
+            break
+        nxt: list[str] = []
+        for node in frontier:
+            for parent in parents.get(node, ()):
+                if parent == trigger or parent in found:
+                    continue
+                found[parent] = depth
+                nxt.append(parent)
+        frontier = nxt
+    return found
+
+
+def compute_scores(
+    internal: dict[str, float],
+    children: dict[str, list[str]],
+    roots,
+) -> dict[str, float]:
+    """Считает score для поддеревьев ``roots`` итеративным memoized DFS.
+
+    score(t) = internal_score(t) + SUM( score(child) / CHILD_DIVISOR ) по всем
+    непосредственным детям. Обход снизу вверх явным стеком — без рекурсивных
+    вызовов Python. При цикле в графе поднимает ValueError (частичный результат
+    не публикуется).
+    """
+    scores: dict[str, float] = {}
+    for root in roots:
+        if root in scores:
+            continue
+        stack = [(root, False)]
+        on_stack: set[str] = set()
+        while stack:
+            node, expanded = stack.pop()
+            if expanded:
+                total = internal[node]
+                for child in children.get(node, ()):
+                    total += scores[child] / CHILD_DIVISOR
+                scores[node] = total
+                on_stack.discard(node)
+                continue
+            if node in scores:
+                continue
+            if node in on_stack:
+                raise ValueError(f"cycle in CONFIRMS graph at {node[:8]}")
+            on_stack.add(node)
+            stack.append((node, True))
+            for child in children.get(node, ()):
+                if child not in scores:
+                    stack.append((child, False))
+    return scores
 
 
 class ConfirmationProcessor:
-    """Обработка событий mid: пересчёт score родителей и публикация кандидатов в out."""
+    """Обработка событий mid: пересчёт score предков и публикация кандидатов в out."""
 
     def __init__(self, redis: Redis, dag: Memgraph, rabbit: RabbitMQ):
         self.redis = redis
@@ -141,109 +197,98 @@ class ConfirmationProcessor:
         await message.ack()
 
     async def _process_hash(self, tx_hash: str) -> None:
-        """Пересчитывает score родителей транзакции ``tx_hash``.
+        """Пересчитывает score предков транзакции ``tx_hash`` и публикует кандидатов.
 
-        Memgraph — источник истины: по хэшу читаем транзакцию, её родителей и
-        непосредственных детей каждого родителя. Ничего не пишем в хранилища.
+        Один пакетный Cypher-запрос читает весь граф. Score считается в памяти,
+        в хранилища ничего не пишется.
         """
         metrics.inc("events")
 
-        # Загружаем транзакцию. Если узла нет — транзакция уже подтверждена и
-        # удалена writer'ом из графа; событие устарело, просто пропускаем.
-        data = await self._fetch_tx_data(tx_hash)
-        if data is None:
+        internal, children = await self._load_graph()
+
+        # Узла нет — транзакция уже подтверждена и удалена writer'ом; пропускаем.
+        if tx_hash not in internal:
             logger.debug(f"mid for {tx_hash[:8]}: tx not in graph, skip")
             metrics.inc("not_found")
             return
 
-        parents = data.get("parents") or []
-        # У транзакции всегда PARENTS (=3) родителя, но защищаемся от пустых данных.
-        for parent_hash in parents:
-            await self._score_parent(parent_hash)
+        parents: dict[str, list[str]] = {h: [] for h in internal}
+        for parent, kids in children.items():
+            for child in kids:
+                parents[child].append(parent)
 
-    async def _score_parent(self, parent_hash: str) -> None:
-        """Считает score одного родителя и при необходимости ставит его в out.
-
-        Один Cypher-запрос возвращает precomputed internal_score родителя и
-        его прямых детей. Дальше — чистая арифметика (сумма / делитель).
-        При параллельных событиях mid возможны конкурентные пересчёты одного
-        родителя: это допустимо, очередь out дедуплицируется queued-маркером,
-        а повторная обработка кандидата в writer'е идемпотентна.
-        """
-        row = await self._fetch_parent_scores(parent_hash)
-        if row is None:
-            # Родитель уже подтверждён/удалён из графа — считать нечего.
-            logger.debug(f"parent {parent_hash[:8]} not in graph, skip")
-            metrics.inc("not_found")
+        ancestors = find_ancestors(tx_hash, parents, MAX_DEPTH)
+        if not ancestors:
             return
 
-        parent_score, children_scores = row
-        score = candidate_score(parent_score, children_scores)
-        metrics.inc("scored")
-        metrics.observe("score", score)
+        # Считаем score всех кандидатов до первой публикации: при цикле или
+        # нарушении инварианта исключение поднимется, и частичный результат не
+        # уйдёт в out.
+        scores = compute_scores(internal, children, ancestors.keys())
 
-        if score < SCORE_THRESHOLD:
-            logger.info(f"parent {parent_hash[:8]} score={score:.4f} < {SCORE_THRESHOLD}, skip")
-            return
+        for candidate in ancestors:
+            score = scores[candidate]
+            metrics.inc("scored")
+            metrics.observe("score", score)
 
-        logger.info(f"parent {parent_hash[:8]} score={score:.4f} > {SCORE_THRESHOLD}, out")
-        # score >= 1 — кандидат готов к подтверждению. Ставим в out с
-        # дедупликацией по queued-маркеру (ожидаем освобождения маркера до
-        # QUEUED_WAIT; если не дождались — PublishError → requeue события).
-        published = await enqueue_candidate(self.rabbit, self.redis, parent_hash, skip_if_queued=False)
-        if published:
-            metrics.inc("enqueued")
-            metrics.event(
-                "info",
-                "out",
-                f"{parent_hash[:8]} score={score:.2f} → out",
-                ref=parent_hash,
-                key=f"out:{parent_hash}",
-            )
-        else:
-            # skip_if_queued=False не возвращает False, но на всякий случай
-            # учитываем: кандидат уже стоит в очереди.
-            metrics.inc("dedup")
+            if score < SCORE_THRESHOLD:
+                logger.info(f"candidate {candidate[:8]} score={score:.4f} < {SCORE_THRESHOLD}, skip")
+                continue
+
+            logger.info(f"candidate {candidate[:8]} score={score:.4f} > {SCORE_THRESHOLD}, out")
+            # score >= 1 — кандидат готов к подтверждению. Ставим в out с
+            # дедупликацией по queued-маркеру (ожидаем освобождения маркера до
+            # QUEUED_WAIT; если не дождались — PublishError → requeue события).
+            published = await enqueue_candidate(self.rabbit, self.redis, candidate, skip_if_queued=False)
+            if published:
+                metrics.inc("enqueued")
+                metrics.event(
+                    "info",
+                    "out",
+                    f"{candidate[:8]} score={score:.2f} → out",
+                    ref=candidate,
+                    key=f"out:{candidate}",
+                )
+            else:
+                # skip_if_queued=False не возвращает False, но на всякий случай
+                # учитываем: кандидат уже стоит в очереди.
+                metrics.inc("dedup")
 
     # ------------------------------------------------------------------
     # Чтение графа
     # ------------------------------------------------------------------
 
-    async def _fetch_tx_data(self, tx_hash: str) -> dict | None:
-        """Возвращает ``t.data`` транзакции по хэшу или None."""
-        async with self.dag.driver.session() as session:
-            result = await session.run(
-                "MATCH (t:Transaction {hash: $hash}) RETURN t.data AS data",
-                hash=tx_hash,
-            )
-            record = await result.single()
-            return record["data"] if record else None
+    async def _load_graph(self) -> tuple[dict[str, float], dict[str, list[str]]]:
+        """Один Cypher-запрос: hash, internal_score и дети каждого узла.
 
-    async def _fetch_parent_scores(self, parent_hash: str) -> tuple[float, list[float]] | None:
-        """Возвращает internal_score родителя и список internal_score его прямых детей.
-
-        Один Cypher-запрос: precomputed значения из графа, никаких вычислений
-        формулы на стороне Python. Прямые дети — только непосредственные
-        потомки по ребрам CONFIRMS (OPTIONAL MATCH без глубины).
+        Возвращает (internal, children). Нарушение инварианта (нечисловой
+        internal_score или ссылка на отсутствующий узел) поднимает ValueError.
         """
         async with self.dag.driver.session() as session:
-            # Получение всех узлов (только число — без полного обхода данных)
-            result = await session.run("MATCH (t:Transaction) RETURN count(t) AS total")
-            record = await result.single()
-            logger.info("Nodes: %s", record["total"])
             result = await session.run(
                 """
-                MATCH (p:Transaction {hash: $hash})
-                OPTIONAL MATCH (p)-[:CONFIRMS]->(c:Transaction)
-                RETURN p.internal_score AS parent_score, collect(c.internal_score) AS children_scores
-                """,
-                hash=parent_hash,
+                MATCH (n:Transaction)
+                OPTIONAL MATCH (n)-[:CONFIRMS]->(c:Transaction)
+                RETURN n.hash AS hash, n.internal_score AS score, collect(c.hash) AS children
+                """
             )
-            record = await result.single()
-            if not record or record["parent_score"] is None:
-                return None
-            children = [s for s in (record["children_scores"] or []) if s is not None]
-            return record["parent_score"], children
+            internal: dict[str, float] = {}
+            children: dict[str, list[str]] = {}
+            async for record in result:
+                h = record["hash"]
+                s = record["score"]
+                if isinstance(s, bool) or not isinstance(s, (int, float)):
+                    raise ValueError(f"invalid internal_score for {h[:8]}")
+                internal[h] = s
+                children[h] = [c for c in (record["children"] or []) if c is not None]
+
+        for h, kids in children.items():
+            for child in kids:
+                if child not in internal:
+                    raise ValueError(f"edge to unknown node {child[:8]} from {h[:8]}")
+
+        logger.info("Nodes: %s", len(internal))
+        return internal, children
 
 
 class ConfirmationService:
