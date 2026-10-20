@@ -33,6 +33,6 @@ pane "poetry run python run.py conf --watch"
 sleep 1
 pane "poetry run python run.py write --watch"
 sleep 1
-pane "make tx"
+pane "poetry run python tx_bot.py --watch"
 
 tmux attach-session -t "$SESSION"

@@ -4,11 +4,13 @@ import logging
 import os
 import random
 import sys
+import threading
 import time
 import uuid
 from multiprocessing import Process
 
 import httpx
+from watchfiles import watch
 
 from keys import pk, sk
 from src.console.style import fmt_ms
@@ -141,8 +143,17 @@ def process_target(t, c):
             dumper.cancel()
 
 
+def reload_on_self_change():
+    """Перезапуск процесса при изменении самого tx_bot.py (режим --watch)."""
+    self_path = os.path.abspath(__file__)
+    for _ in watch(os.path.dirname(self_path), recursive=False, watch_filter=lambda _c, p: os.path.abspath(p) == self_path):
+        logger.info("Detected change in %s, restarting...", self_path)
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 def main():
-    args = sys.argv[1:]
+    watch_mode = "--watch" in sys.argv[1:]
+    args = [a for a in sys.argv[1:] if a != "--watch"]
 
     try:
         t = int(args[0])
@@ -158,6 +169,12 @@ def main():
         n = 1
 
     """Основная функция для запуска многопроцессного генератора транзакций."""
+    if watch_mode:
+        # Dev-режим: один процесс без multiprocessing, вотчер в потоке.
+        threading.Thread(target=process_target, args=(t, c), daemon=True).start()
+        reload_on_self_change()
+        return
+
     num_processes = n  # Количество процессов (можно настроить)
 
     metrics.set_role("tx-main")

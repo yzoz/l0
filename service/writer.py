@@ -110,8 +110,8 @@ class WriterProcessor:
             return
 
         try:
-            logger.info(f"{tx_hash[:8]} going to process")
-            outcome = await self.process_candidate(tx_hash)        
+            #logger.info(f"{tx_hash[:8]} going to process")
+            outcome = await self.process_candidate(tx_hash)
         except PublishError as e:
             # Временная ошибка публикации (requeue deferred-детей). Узел ещё в
             # графе, маркер queued остаётся — повторная доставка добьёт «хвост».
