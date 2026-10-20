@@ -7,6 +7,8 @@ import sys
 import threading
 import time
 import uuid
+from enum import IntEnum
+from typing import AsyncIterator
 from multiprocessing import Process
 
 import httpx
@@ -30,27 +32,171 @@ start = time.time()
 # Полные JSON и подписи — только в режиме подробного вывода.
 VERBOSE = os.environ.get("L0_VERBOSE") == "1"
 
+class Mode(IntEnum):
+    NORMAL = 0
+    DROP   = 1
+    SPIKE  = 2
+    WAVE   = 3
+    ATTACK = 4
 
-async def arange(count):
-    """Генератор для асинхронного перебора чисел."""
+# целевые λ
+LAMBDA = {
+    Mode.NORMAL: 2.5,
+    Mode.DROP:   1.0,
+    Mode.SPIKE:  5.0,
+    Mode.WAVE:  10.0,
+    Mode.ATTACK:25.0,
+}
+
+# средние длительности (сек) — середины твоих диапазонов
+MEAN_DUR = {
+    Mode.NORMAL: 210.0,   # 3.5 мин
+    Mode.DROP:   120.0,   # 2 мин
+    Mode.SPIKE:   60.0,   # 1 мин
+    Mode.WAVE:    27.5,   # ~28 с
+    Mode.ATTACK:  10.0,   # 10 с
+}
+# матрица интенсивностей переходов (rate matrix, только off-diagonal)
+# строки/столбцы в порядке Mode
+# подобрана так, чтобы π ≈ [0.64, 0.20, 0.10, 0.05, 0.01]
+Q = [
+    # from NORMAL
+    [0.0,  0.0018, 0.0012, 0.0005, 0.00015],
+    # from DROP
+    [0.006, 0.0,   0.0015, 0.0004, 0.0001],
+    # from SPIKE
+    [0.012, 0.003,  0.0,   0.002,  0.0005],
+    # from WAVE
+    [0.025, 0.005,  0.008,  0.0,   0.002],
+    # from ATTACK
+    [0.06,  0.01,   0.02,   0.01,   0.0],
+]
+
+RAMP_SEC = 2.0   # длительность плавного перехода λ
+
+async def arange2(count: int) -> AsyncIterator[tuple[int, Mode]]:
+    MEAN_DUR = {
+        Mode.NORMAL: 15.0,
+        Mode.DROP:    8.0,
+        Mode.SPIKE:   6.0,
+        Mode.WAVE:    4.0,
+        Mode.ATTACK:  2.0,
+    }
+    state = Mode.NORMAL
+    cur_λ = LAMBDA[state]
+    target_λ = cur_λ
+    ramp_left = 0.0
+    # время до выхода из текущего режима
+    sojourn_left = random.expovariate(1.0 / MEAN_DUR[state])
+
+    # вероятности перехода (куда идём, когда выходим)
+    # строки нормализованы, сумма = 1
+    P = [
+        # from NORMAL → DROP, SPIKE, WAVE, ATTACK
+        [0.50, 0.30, 0.15, 0.05],
+        # from DROP
+        [0.70, 0.20, 0.08, 0.02],
+        # from SPIKE
+        [0.55, 0.15, 0.20, 0.10],
+        # from WAVE
+        [0.50, 0.15, 0.20, 0.15],
+        # from ATTACK
+        [0.45, 0.15, 0.25, 0.15],
+    ]
+
     for i in range(count):
-        yield i
-        await asyncio.sleep(1)
-        # if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 2.5), 3))
-        # if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 5), 3))
-        # await asyncio.sleep(round(random.uniform(0.01, 0.05), 3))
-        """await asyncio.sleep(random.randint(0, 30))
-        if i % 2 == 0: await asyncio.sleep(random.randint(0, 30))
-        if i % 3 == 0: await asyncio.sleep(random.randint(0, 30))
-        if i % 5 == 0: await asyncio.sleep(random.randint(0, 30))
-        if i % 7 == 0: await asyncio.sleep(random.randint(0, 30))
-        if i % 10 == 0: await asyncio.sleep(random.randint(0, 30))"""
+        if sojourn_left <= 0:
+            # выбираем новый state
+            probs = P[state]
+            r = random.random()
+            acc = 0.0
+            for j, p in enumerate(probs):
+                acc += p
+                if r <= acc:
+                    # j+1 потому что 0-й элемент P — это первый возможный target
+                    targets = [Mode.DROP, Mode.SPIKE, Mode.WAVE, Mode.ATTACK] if state == Mode.NORMAL else \
+                              [Mode.NORMAL, Mode.SPIKE, Mode.WAVE, Mode.ATTACK] if state == Mode.DROP else \
+                              [Mode.NORMAL, Mode.DROP, Mode.WAVE, Mode.ATTACK] if state == Mode.SPIKE else \
+                              [Mode.NORMAL, Mode.DROP, Mode.SPIKE, Mode.ATTACK] if state == Mode.WAVE else \
+                              [Mode.NORMAL, Mode.DROP, Mode.SPIKE, Mode.WAVE]
+                    state = targets[j]
+                    break
+
+            target_λ = LAMBDA[state]
+            ramp_left = RAMP_SEC
+            sojourn_left = random.expovariate(1.0 / MEAN_DUR[state])
+
+        # λ
+        if ramp_left > 0:
+            progress = 1.0 - (ramp_left / RAMP_SEC)
+            λ = cur_λ + (target_λ - cur_λ) * progress
+        else:
+            λ = target_λ
+            cur_λ = target_λ
+
+        delay = random.expovariate(λ)
+        await asyncio.sleep(delay)
+
+        sojourn_left -= delay
+        if ramp_left > 0:
+            ramp_left = max(0.0, ramp_left - delay)
+            if ramp_left == 0:
+                cur_λ = target_λ
+
+        yield i, state
+
+
+async def arange(count: int) -> AsyncIterator[tuple[int, Mode]]:
+    state = Mode.NORMAL
+    cur_λ = LAMBDA[state]
+    target_λ = cur_λ
+    ramp_left = 0.0          # сколько секунд ещё идёт ramp
+    next_switch = random.expovariate(sum(Q[state]))  # время до следующего скачка режима
+
+    for i in range(count):
+        # 1. решаем, не пора ли сменить режим
+        if next_switch <= 0:
+            # выбираем новый state пропорционально Q[state]
+            rates = Q[state]
+            total = sum(rates)
+            r = random.random() * total
+            acc = 0.0
+            for new_s, rate in enumerate(rates):
+                acc += rate
+                if r <= acc:
+                    state = Mode(new_s)
+                    break
+            target_λ = LAMBDA[state]
+            ramp_left = RAMP_SEC
+            next_switch = random.expovariate(sum(Q[state]))
+
+        # 2. текущая λ (lerp если ramp)
+        if ramp_left > 0:
+            # линейная интерполяция
+            progress = 1.0 - (ramp_left / RAMP_SEC)
+            λ = cur_λ + (target_λ - cur_λ) * progress
+        else:
+            λ = target_λ
+            cur_λ = target_λ
+
+        # 3. Poisson delay
+        delay = random.expovariate(λ)
+        await asyncio.sleep(delay)
+
+        # 4. тикаем таймеры
+        next_switch -= delay
+        if ramp_left > 0:
+            ramp_left = max(0.0, ramp_left - delay)
+            if ramp_left == 0:
+                cur_λ = target_λ
+
+        yield i, state
 
 
 async def send(t, client):
     # await asyncio.sleep(random.randint(0, 30))
     """Отправка случайных транзакций в асинхронном режиме."""
-    async for j in arange(int(t)):
+    async for j, state in arange2(int(t)):
         n = len(sk) - 1
         i = random.randint(0, n)
         if j % 3:
@@ -107,7 +253,7 @@ async def send(t, client):
             if VERBOSE:
                 logger.info(f"Response: {r.text}")
             else:
-                logger.info("tx %s (%s) [%s] -> %s %s", short, a, sp, r.status_code, fmt_ms(elapsed_ms))
+                logger.info("%s ~ %s (%s) [%s] -> %s %s", state.name, short, a, sp, r.status_code, fmt_ms(elapsed_ms))
         except Exception as e:
             metrics.inc("err")
             metrics.event("error", "send", f"{u[:8]} запрос не удался: {type(e).__name__}", ref=u, key=f"exc:{u}")
