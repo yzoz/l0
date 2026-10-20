@@ -163,10 +163,9 @@ class WriterProcessor:
         # возможно только по новому связанному событию).
         num_txs = await self._count_txs()
         if num_txs <= PARENTS:
-            await clear_queued(self.redis, tx_hash)
             metrics.inc("dropped")
             metrics.event("info", "drop", f"{short} отброшен: пул <= {PARENTS}", ref=tx_hash, key=f"drop:{tx_hash}")
-            return "retry"
+            return "retry" # HACK вот тут пока не ясно.. на самом деле не 100% гарантия, что эти три не улетят.. надо тэстить
 
         async with self.dag.driver.session() as session:
             # Идемпотентность: одна обработка кандидата за раз.
