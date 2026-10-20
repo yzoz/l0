@@ -29,7 +29,7 @@ CONFIRMED_TTL = 360
 # Литтла: N = C_max / W_avg, где C_max — желаемый потолок узлов, W_avg — среднее
 # время жизни узла (задаётся writer'ом/TTL). При нескольких процессах-consumer'ах
 # реальный потолок кластера = RATE_LIMIT_TPS × (число процессов).
-RATE_LIMIT_TPS = 5
+RATE_LIMIT_TPS = 3
 
 # --- Размер пула родителей (pool.py) ---
 PARENTS = 3

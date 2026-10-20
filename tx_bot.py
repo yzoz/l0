@@ -53,7 +53,7 @@ MEAN_DUR = {
     Mode.NORMAL: 210.0,   # 3.5 мин
     Mode.DROP:   120.0,   # 2 мин
     Mode.SPIKE:   60.0,   # 1 мин
-    Mode.WAVE:    27.5,   # ~28 с
+    Mode.WAVE:    30.0,   # ~28 с
     Mode.ATTACK:  10.0,   # 10 с
 }
 # матрица интенсивностей переходов (rate matrix, только off-diagonal)
@@ -77,10 +77,10 @@ RAMP_SEC = 2.0   # длительность плавного перехода λ
 async def arange2(count: int) -> AsyncIterator[tuple[int, Mode]]:
     MEAN_DUR = {
         Mode.NORMAL: 15.0,
-        Mode.DROP:    8.0,
-        Mode.SPIKE:   6.0,
-        Mode.WAVE:    4.0,
-        Mode.ATTACK:  2.0,
+        Mode.DROP:    7.5,
+        Mode.SPIKE:   3.25,
+        Mode.WAVE:    1.625,
+        Mode.ATTACK:  0.8125,
     }
     state = Mode.NORMAL
     cur_λ = LAMBDA[state]

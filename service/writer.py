@@ -176,14 +176,14 @@ class WriterProcessor:
                 # Шаг 2. Уже подтверждён — добиваем «хвост» (повторная доставка
                 # после сбоя на прошлой попытке, либо дубль сообщения out).
                 if await self.redis.client.exists(f"confirmed:{tx_hash}"):
-                    logger.info(f"{short} already confirmed, finishing tail")
+                    logger.info(f"{short} 202")
                     return await self._finish_tail(session, tx_hash, token)
 
                 # Шаг 3. Загрузка данных узла. Если узла нет — кандидат уже
                 # обработан и удалён (мёртвый/дубликат), событие устарело.
                 data = await self._fetch_node_data(session, tx_hash)
                 if data is None:
-                    logger.info(f"{short} not in graph, ack and clear marker")
+                    logger.info(f"{short} 404")
                     await clear_queued(self.redis, tx_hash)
                     return "ack"
 
@@ -201,7 +201,7 @@ class WriterProcessor:
                         ref=tx_hash,
                         key=f"parent-dead:{tx_hash}",
                     )
-                    logger.info(f"{short} мёртвый родитель — каскадное удаление")
+                    logger.info(f"{short} DEAD -> DEL")
                     await self._kill_subtree(session, tx_hash)
                     await clear_queued(self.redis, tx_hash)
                     return "ack"
@@ -217,7 +217,7 @@ class WriterProcessor:
                     metrics.event(
                         "info", "defer", f"{short} отложен до родителя", ref=tx_hash, key=f"defer:{tx_hash}"
                     )
-                    logger.info(f"{short} отложен до родителя")
+                    logger.info(f"{short} DEFERED")
                     return "ack"
 
                 # Родители подтверждены — пометка ожидания больше не нужна.
@@ -237,7 +237,7 @@ class WriterProcessor:
                             ref=tx_hash,
                             key=f"funds:{tx_hash}",
                         )
-                        logger.info(f"{short} недостаточно средств")
+                        logger.info(f"{short} NO FUND")
                         await self._kill_subtree(session, tx_hash)
                         await clear_queued(self.redis, tx_hash)
                         return "ack"
@@ -273,7 +273,7 @@ class WriterProcessor:
         # Узел удалён — рёбра потеряны, дети уже в очереди.
         await self._delete_node(session, tx_hash)
         await self._release_marker(tx_hash, token)
-        logger.info(f"{short} finalized: node removed, marker released")
+        logger.info(f"{short} 200")
         return "ack"
 
     async def _release_marker(self, tx_hash: str, token: str | None) -> None:
@@ -325,7 +325,7 @@ class WriterProcessor:
             metrics.inc("insert_errors")
             metrics.event("error", "insert", f"{tx.hash[:8]} ошибка записи", ref=tx.hash, key=f"insert:{tx.hash}")
             return "failed"
-        logger.info("%s confirmed & saved: ", tx.hash[:8])
+        logger.info("%s 201", tx.hash[:8])
 
         # 2. Redis — маркер подтверждения; для перевода дополнительно обновляются
         # балансы. Минт balance:* не трогает — его pre-load уже установлен genesis.

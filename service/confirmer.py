@@ -204,9 +204,10 @@ class ConfirmationProcessor:
         """
         metrics.inc("events")
 
-        internal, children = await self._load_graph()
+        internal, children, nodes = await self._load_graph()
 
-        # Узла нет — транзакция уже подтверждена и удалена writer'ом; пропускаем.
+        # Узла нет — транзакция уже подтверждена и удалена writer'ом; пропускаем. 
+        # HACK может оно тут и не надо?
         if tx_hash not in internal:
             logger.debug(f"mid for {tx_hash[:8]}: tx not in graph, skip")
             metrics.inc("not_found")
@@ -232,10 +233,10 @@ class ConfirmationProcessor:
             metrics.observe("score", score)
 
             if score < SCORE_THRESHOLD:
-                logger.info(f"candidate {candidate[:8]} score={score:.4f} < {SCORE_THRESHOLD}, skip")
+                logger.info(f"{candidate[:8]} SCORE={score:.4f} < {SCORE_THRESHOLD} ({nodes}) <- SKIP")
                 continue
 
-            logger.info(f"candidate {candidate[:8]} score={score:.4f} > {SCORE_THRESHOLD}, out")
+            logger.info(f"{candidate[:8]} SCORE={score:.4f} > {SCORE_THRESHOLD} ({nodes}) -> OUT")
             # score >= 1 — кандидат готов к подтверждению. Ставим в out с
             # дедупликацией по queued-маркеру (ожидаем освобождения маркера до
             # QUEUED_WAIT; если не дождались — PublishError → requeue события).
@@ -258,7 +259,7 @@ class ConfirmationProcessor:
     # Чтение графа
     # ------------------------------------------------------------------
 
-    async def _load_graph(self) -> tuple[dict[str, float], dict[str, list[str]]]:
+    async def _load_graph(self) -> tuple[dict[str, float], dict[str, list[str]], int]:
         """Один Cypher-запрос: hash, internal_score и дети каждого узла.
 
         Возвращает (internal, children). Нарушение инварианта (нечисловой
@@ -287,8 +288,7 @@ class ConfirmationProcessor:
                 if child not in internal:
                     raise ValueError(f"edge to unknown node {child[:8]} from {h[:8]}")
 
-        logger.info("Nodes: %s", len(internal))
-        return internal, children
+        return internal, children, len(internal)
 
 
 class ConfirmationService:

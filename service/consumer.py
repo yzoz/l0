@@ -151,7 +151,7 @@ class ConsumerProcessor:
             # Обычный путь: транзакции в графе ещё нет.
             # Шаг 1. Проверка дубликатов (заодно резервирует uniq в Redis).
             if await self.check_duplicate(tx):
-                logger.info(f"{short} duplicate transaction")
+                logger.info(f"{short} DUPLICATE")
                 metrics.inc("dup")
                 metrics.event("warn", "dup", f"{short} дубликат", ref=tx_hash, key=f"dup:{tx_hash}")
                 #LOGGING: терминальный отказ — дубликат (credit, uniq), сообщение исключается.
@@ -174,7 +174,7 @@ class ConsumerProcessor:
             try:
                 # Шаг 2. Проверка баланса.
                 if not await self.verify_balance(tx):
-                    logger.info(f"{short} insufficient funds for {tx.credit}")
+                    logger.info(f"{short} NO FUNDS")
                     metrics.inc("no_funds")
                     metrics.event(
                         "warn", "funds", f"{short} недостаточно средств", ref=tx_hash, key=f"funds:{tx_hash}"
@@ -196,7 +196,7 @@ class ConsumerProcessor:
 
                 # Шаг 3. Проверка наличия родителей (в графе или подтверждённых).
                 if not await self.verify_parents(tx_hash, tx):
-                    logger.info(f"{short} нет родителя")
+                    logger.info(f"{short} NO PARENT")
                     metrics.inc("no_parent")
                     metrics.event("warn", "parent", f"{short} нет родителя", ref=tx_hash, key=f"parent:{tx_hash}")
                     #LOGGING: терминальный отказ — родитель не найден, сообщение исключается.
@@ -261,7 +261,7 @@ class ConsumerProcessor:
                 await self.release_uniq(tx)
                 raise
 
-            logger.info(f"{short} processed and added to graph")
+            logger.info(f"{short} ADD")
             metrics.inc("added")
             metrics.event("ok", "added", f"{short} добавлена", ref=tx_hash, key=f"added:{tx_hash}")
 
@@ -324,7 +324,7 @@ class ConsumerProcessor:
 
         # Шаг 4. Всё доведено до конца — подтверждаем исходное сообщение.
         await message.ack()
-        logger.info(f"{short} retry completed: mid republished, acked")
+        logger.info(f"{short} RETRY COMPLITED")
 
     async def _fetch_graph_data(self, tx_hash: str) -> dict | None:
         """Возвращает данные узла ``t.data`` по хэшу или None, если узла нет."""
@@ -411,11 +411,11 @@ class ConsumerProcessor:
                 )
                 record = await result.single()
                 if not record:
-                    logger.info(f"{tx_hash[:8]} parent transaction {parent_hash[:8]} not found in graph")
+                    logger.info(f"{tx_hash[:8]} PARENT {parent_hash[:8]} 301")
                     # Проверка подтверждения родителя в Redis
                     confirmed_key = f"confirmed:{parent_hash}"
                     if not await self.redis.client.exists(confirmed_key):
-                        logger.warning(f"Parent transaction {parent_hash} not found for {tx_hash}")
+                        logger.warning(f"{tx_hash[:8]} PARENT {parent_hash[:8]} 404")
                         return False
         return True
 
