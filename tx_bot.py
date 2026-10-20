@@ -33,7 +33,7 @@ async def arange(count):
     """Генератор для асинхронного перебора чисел."""
     for i in range(count):
         yield i
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
         # if i % 5 == 0: await asyncio.sleep(round(random.uniform(0, 2.5), 3))
         # if i % 10 == 0: await asyncio.sleep(round(random.uniform(0, 5), 3))
         # await asyncio.sleep(round(random.uniform(0.01, 0.05), 3))
