@@ -47,7 +47,6 @@ async def send(tx: TxRead, rabbit=Depends(get_rabbit)):
         tx_hash = hash_hex(ordered_sum({**dict(tx.content), "sign": tx.sign}))
 
         message = json.dumps(jsonable_encoder(tx))
-        logger.info(f"Publishing to RabbitMQ: {message}")
 
         # Отправка в очередь in с тайм-аутом
         try:

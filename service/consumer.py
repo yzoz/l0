@@ -19,9 +19,10 @@ LIFECYCLE ТРАНЗАКЦИИ (см. .docs/TODO_003.md):
   3. иначе — обычный путь: дубликат → баланс → родители → запись в граф → mid →
      подтверждение сообщения.
 
-Терминальные отказы (bad-json, дубликат, недостаточно средств, нет родителя,
-цикл, конфликт данных) приводят к nack(requeue=False) — сообщение исключается
-без повторной обработки. Метаданные для логирования фиксируются в комментариях
+Терминальные отказы (bad-json, неверная подпись, дубликат, недостаточно средств,
+нет родителя, цикл, конфликт данных) приводят к nack(requeue=False) — сообщение
+исключается без повторной обработки. Сбой драйвера, таймаут и ошибка графа —
+nack(requeue=True). Метаданные для логирования фиксируются в комментариях
 #LOGGING в местах отказов.
 
 uniq-резерв (``uniq:{credit}:{uniq}``) снимается ТОЛЬКО на путях отказа, где
@@ -34,9 +35,12 @@ import json
 import logging
 import os
 import time
+from hashlib import sha512
 
 from aio_pika import IncomingMessage
+from nacl.exceptions import BadSignatureError
 from neo4j.exceptions import Neo4jError, TransientError
+from pydantic import ValidationError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from service.ratelimit import RateLimiter
@@ -47,11 +51,26 @@ from src.database.queues import PublishError, RabbitMQ
 from src.database.redis import Redis
 from src.models.tx import TxStore
 from src.telemetry import metrics
+from src.utils.crypto import verify_message
 from src.utils.data import hash_hex, ordered_sum
 from src.utils.fn import alpha, beta, transfer_score
+from src.utils.lock import redis_lock
 from src.utils.profile import get_balance
 
 logger = logging.getLogger(__name__)
+
+
+def _signature_ok(tx: TxStore) -> bool:
+    """Та же проверка, что POST /send/: sha512(ordered_sum(content)), ключ credit."""
+    content = dict(tx)
+    sign = content.pop("sign", "")
+    if not sign:
+        return False
+    message = sha512(ordered_sum(content).encode("utf-8")).digest()
+    try:
+        return verify_message(tx.credit, sign, message) == message
+    except (BadSignatureError, ValueError, TypeError):
+        return False
 
 
 class ConsumerProcessor:
@@ -71,14 +90,15 @@ class ConsumerProcessor:
           * ack — только после успешной записи в граф И успешной публикации mid;
           * nack(requeue=True) — временные ошибки (таймаут, сбой публикации mid,
             сбой графа): сообщение вернётся и будет обработано повторно;
-          * nack(requeue=False) — терминальные бизнес-отказы (bad-json, дубликат,
-            недостаточно средств, нет родителя, цикл, конфликт данных):
-            сообщение исключается без повторной обработки.
+          * nack(requeue=False) — терминальные бизнес-отказы (bad-json, подпись,
+            дубликат, недостаточно средств, нет родителя, цикл, конфликт данных):
+            сообщение исключается без повторной обработки;
+          * прочие исключения (драйвер, сеть, граф) — nack(requeue=True).
         """
         try:
             tx = self.parse_message(message)
             await self.process_transaction(tx, message)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError, KeyError, ValidationError):
             logger.error("Failed to parse message: Invalid JSON format")
             metrics.inc("bad_format")
             metrics.event("error", "format", "формат сообщения: невалидный JSON", key="format")
@@ -105,11 +125,10 @@ class ConsumerProcessor:
             #   service   = "consumer"
             #   event     = "reject"
             #   reason    = f"error:{type(e).__name__}"
-            #   outcome   = "drop"       # терминально, retry не будет
-            #   error     = str(e)       # текст исключения для диагностики
-            #   payload   = message.body.decode("utf-8", errors="replace")
+            #   outcome   = "requeue"
+            #   error     = str(e)
             #   queue     = "in"
-            await message.nack(requeue=False)
+            await message.nack(requeue=True)
 
     def parse_message(self, message: IncomingMessage) -> TxStore:
         """Преобразует сырые данные сообщения в объект TxStore.
@@ -138,7 +157,14 @@ class ConsumerProcessor:
         short = tx_hash[:8]
         metrics.inc("received")
 
-        async with self.redis.client.lock(f"consumer:{tx_hash}"):
+        if not _signature_ok(tx):
+            logger.info(f"{short} BAD SIGN")
+            metrics.inc("bad_sign")
+            metrics.event("warn", "sign", f"{short} неверная подпись", ref=tx_hash, key=f"sign:{tx_hash}")
+            await message.nack(requeue=False)
+            return
+
+        async with redis_lock(self.redis.client, f"consumer:{tx_hash}"):
             # Шаг 0. Возможно, транзакция УЖЕ записана в граф (ретрай после сбоя
             # публикации mid или повторная доставка сообщения). Проверяем граф
             # ДО проверки дубликата: иначе uniq-гард забраковал бы легитимный
@@ -220,20 +246,21 @@ class ConsumerProcessor:
                 # только на пути реальной вставки, не на ретраях/отказах.
                 wait = await self.limiter.acquire()
                 metrics.observe("rl_wait", wait)
-                if not await self.add_to_graph(tx_hash, tx):
-                    #LOGGING: терминальный отказ — ошибка записи в граф или цикл, сообщение исключается.
-                    # Для timeseries DB фиксируется событие:
-                    #   service   = "consumer"
-                    #   event     = "reject"
-                    #   reason    = "graph"
-                    #   outcome   = "drop"       # терминально, retry не будет
-                    #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
-                    #   credit    = tx.credit     # адрес плательщика
-                    #   amount    = tx.amount     # сумма
-                    #   parents   = tx.parents    # родители (3 шт.)
-                    #   uniq      = tx.uniq       # nonce транзакции
-                    await message.nack(requeue=False)
-                    await self.release_uniq(tx)
+                try:
+                    added = await self.add_to_graph(tx_hash, tx)
+                except Neo4jError:
+                    # MERGE мог уже пройти. Резерв снимаем только если узла нет.
+                    if await self._fetch_graph_data(tx_hash) is None:
+                        await self.release_uniq(tx)
+                    await message.nack(requeue=True)
+                    return
+                if not added:
+                    # False — цикл (узел уже удалён) или промах обязательного ребра.
+                    if await self._fetch_graph_data(tx_hash) is None:
+                        await message.nack(requeue=False)
+                        await self.release_uniq(tx)
+                    else:
+                        await message.nack(requeue=True)
                     return
 
                 # Шаг 5. Уведомление confirmer'а (mid). Публикуем ДО ack: если
@@ -375,7 +402,12 @@ class ConsumerProcessor:
         reserved = await self.redis.client.set(f"uniq:{tx.credit}:{tx.uniq}", 1, nx=True)
         if not reserved:
             return True
-        exists = await self.db.find_one({"credit": tx.credit, "uniq": tx.uniq})
+        try:
+            exists = await self.db.find_one({"credit": tx.credit, "uniq": tx.uniq})
+        except Exception:
+            # Узла ещё нет: свой резерв не должен выглядеть как дубликат на ретрае.
+            await self.release_uniq(tx)
+            raise
         return bool(exists)
 
     async def release_uniq(self, tx: TxStore) -> None:
@@ -415,8 +447,9 @@ class ConsumerProcessor:
                     # Проверка подтверждения родителя в Redis
                     confirmed_key = f"confirmed:{parent_hash}"
                     if not await self.redis.client.exists(confirmed_key):
-                        logger.warning(f"{tx_hash[:8]} PARENT {parent_hash[:8]} 404")
-                        return False
+                        if not await self.db.find_one({"hash": parent_hash}):
+                            logger.warning(f"{tx_hash[:8]} PARENT {parent_hash[:8]} 404")
+                            return False
         return True
 
     # ------------------------------------------------------------------
@@ -445,7 +478,7 @@ class ConsumerProcessor:
         не используется — score транзакции считается в confirmer'е в памяти и
         нигде не сохраняется.
         """
-        async with self.redis.client.lock(f"dag:{tx_hash}"):
+        async with redis_lock(self.redis.client, f"dag:{tx_hash}"):
             async with self.dag.driver.session() as session:
                 now = int(time.time_ns() / 1000)
                 tx_data = dict(tx, time=now)
@@ -476,7 +509,7 @@ class ConsumerProcessor:
                     logger.error(f"Service error: {e}")
                     metrics.inc("error")
                     metrics.event("error", "graph", f"{tx_hash[:8]} ошибка графа: {type(e).__name__}", ref=tx_hash)
-                    return False
+                    raise
 
     async def _ensure_edges(self, tx_hash: str, tx: TxStore) -> bool:
         """Идемпотентно дописывает недостающие рёбра и проверяет отсутствие цикла.
@@ -484,7 +517,7 @@ class ConsumerProcessor:
         Используется recovery-путём: при сбое между вставкой узла и созданием
         рёбер повторная доставка должна довести граф до целостного состояния.
         """
-        async with self.redis.client.lock(f"dag:{tx_hash}"):
+        async with redis_lock(self.redis.client, f"dag:{tx_hash}"):
             async with self.dag.driver.session():
                 try:
                     if not await self._create_edges(tx_hash, tx):
@@ -500,16 +533,23 @@ class ConsumerProcessor:
         async with self.dag.driver.session() as session:
             for parent in tx.parents:
                 confirmed_key = f"confirmed:{parent}"
-                if not await self.redis.client.exists(confirmed_key):
-                    await session.run(
-                        """
-                        MATCH (parent:Transaction {hash: $parent_hash})
-                        MATCH (child:Transaction {hash: $child_hash})
-                        MERGE (parent)-[:CONFIRMS]->(child)
-                        """,
-                        parent_hash=parent,
-                        child_hash=tx_hash,
-                    )
+                if await self.redis.client.exists(confirmed_key):
+                    continue
+                if await self.db.find_one({"hash": parent}):
+                    continue
+                result = await session.run(
+                    """
+                    MATCH (parent:Transaction {hash: $parent_hash})
+                    MATCH (child:Transaction {hash: $child_hash})
+                    MERGE (parent)-[:CONFIRMS]->(child)
+                    RETURN count(parent) AS n
+                    """,
+                    parent_hash=parent,
+                    child_hash=tx_hash,
+                )
+                record = await result.single()
+                if not record or record["n"] == 0:
+                    return False
         return True
 
     async def _check_cycle(self, tx_hash: str) -> bool:

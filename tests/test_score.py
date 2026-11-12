@@ -33,9 +33,9 @@ class TestTransferScore:
         assert transfer_score(10**12, alpha, beta) < 1.0
 
     def test_formula_values(self):
-        # Проверка на конкретных значениях: 1 - (1 + 0.0005*x)^(-0.5)
-        assert transfer_score(100, alpha, beta) == pytest.approx(1 - (1 + 0.05) ** (-0.5))
-        assert transfer_score(1000, alpha, beta) == pytest.approx(1 - (1 + 0.5) ** (-0.5))
+        # 1 - (1 + alpha * x) ** (-beta), константы из src/utils/fn.py
+        assert transfer_score(100, alpha, beta) == pytest.approx(1 - (1 + alpha * 100) ** (-beta))
+        assert transfer_score(1000, alpha, beta) == pytest.approx(1 - (1 + alpha * 1000) ** (-beta))
 
 
 class TestComputeScores:

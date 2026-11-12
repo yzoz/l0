@@ -36,11 +36,11 @@ from src.utils.profile import balance_from_ledger
 # Ожидаемый genesis-набор (соответствует genesis.py). Закрепляет, что минты
 # не задваиваются и не теряются. TOTAL — сумма всех созданных денег.
 EXPECTED_MINTS = {
-    ("genesis", 500000000000000),
-    ("genesis2", 330000000000000),
-    ("genesis3", 250000000000000),
+    ("genesis", 5_000_000),
+    ("genesis2", 7_000_000),
+    ("genesis3", 9_000_000),
 }
-EXPECTED_TOTAL_MINT = sum(amount for _, amount in EXPECTED_MINTS)  # 1_080_000_000_000_000
+EXPECTED_TOTAL_MINT = sum(amount for _, amount in EXPECTED_MINTS)  # 21_000_000
 
 
 async def _load_balances(mongodb: MongoDB, redis: Redis):

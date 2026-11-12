@@ -26,6 +26,10 @@ class MongoDB:
         )
         self.db = self.client["feo"]
         self.tx = self.db.tx
+        # Те же unique-индексы, что genesis.py. Повторный connect не падает.
+        # Дубли в коллекции — ошибка старта, данные не удаляем.
+        await self.tx.create_index("hash", unique=True)
+        await self.tx.create_index([("credit", 1), ("uniq", 1)], unique=True)
 
     async def insert_tx(self, tx: TxWrite) -> bool:
         """Вставляет одну транзакцию в коллекцию tx"""
@@ -73,10 +77,13 @@ class MongoDB:
             logger.error(f"Failed to aggregate: {e}")
             raise
 
-    async def find(self, query: dict, skip: int, limit: int):
+    async def find(self, query: dict, skip: int, limit: int, sort=None):
         """Ищет транзакции с пропуском и лимитом"""
         try:
-            cursor = self.tx.find(query).skip(skip).limit(limit)
+            cursor = self.tx.find(query)
+            if sort:
+                cursor = cursor.sort(sort)
+            cursor = cursor.skip(skip).limit(limit)
             result = await cursor.to_list(length=None)
             logger.debug(f"Find query: {query}, skip: {skip}, limit: {limit}, results: {len(result)}")
             return result

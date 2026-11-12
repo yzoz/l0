@@ -4,6 +4,13 @@ from contextlib import asynccontextmanager
 
 from redis.asyncio import Redis
 
+from src.config import LOCK_BLOCKING_TIMEOUT, LOCK_TIMEOUT
+
+
+def redis_lock(client, name: str):
+    """Лок с конечным TTL и конечным ожиданием. timeout=None запрещён."""
+    return client.lock(name, timeout=LOCK_TIMEOUT, blocking_timeout=LOCK_BLOCKING_TIMEOUT)
+
 
 class RedisLock:
     def __init__(self, redis: Redis, lock_key: str, timeout: int = 10, retry_delay: float = 0.1):

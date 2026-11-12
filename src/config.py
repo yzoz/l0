@@ -47,6 +47,12 @@ QUEUED_POLL = 0.5
 # ошибка и requeue события, чтобы не потерять его.
 QUEUED_WAIT = 60
 
+# Redis-lock. timeout — TTL ключа: дольше одной нормальной обработки
+# (запись Mongo + Memgraph), но конечный — упавший держатель не клинит роль.
+# blocking_timeout — сколько ждать чужой лок, затем LockError → nack(requeue=True).
+LOCK_TIMEOUT = 60
+LOCK_BLOCKING_TIMEOUT = 15
+
 # Адреса генезис-транзакций (получатели начальных средств).
 DEV_ADDR = (
     "9ui23Wuta5Sg9XSSmXmeQeRstaBm3fVK2JPz75zxZyPy",

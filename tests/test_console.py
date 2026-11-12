@@ -364,7 +364,7 @@ async def test_probe_all_returns_all_services():
 
 
 async def test_consumer_counts_events():
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from keys import pk
     from service.consumer import ConsumerProcessor
@@ -390,7 +390,8 @@ async def test_consumer_counts_events():
     message = MagicMock()
     message.body = json.dumps({"content": content, "sign": "s"}).encode()
     message.nack = AsyncMock()
-    await processor.process_message(message)
+    with patch("service.consumer._signature_ok", return_value=True):
+        await processor.process_message(message)
     assert m.counter("received") == 1
     assert m.counter("dup") == 1
     events = m.snapshot()["events"]
@@ -531,3 +532,33 @@ async def test_confirmer_scores_ancestors_from_graph():
     assert scores[p1] == pytest.approx(0.86 + 0.80 / 3)
     assert scores[p1] >= 1.0
     assert scores[p2] < 1.0
+
+
+async def test_finish_tail_keeps_marker_when_delete_fails():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from service.writer import WriterProcessor
+
+    redis = MagicMock()
+    redis.client.lock = MagicMock()
+    redis.client.lock.return_value.__aenter__ = AsyncMock()
+    redis.client.lock.return_value.__aexit__ = AsyncMock()
+    processor = WriterProcessor(MagicMock(), redis, MagicMock(), MagicMock())
+    processor._requeue_deferred_children = AsyncMock()
+    processor._count_txs = AsyncMock(return_value=10)
+    processor._delete_node = AsyncMock(return_value=False)
+    processor._release_marker = AsyncMock()
+    assert await processor._finish_tail(MagicMock(), "ab" * 64, "tok") == "retry"
+    processor._release_marker.assert_not_called()
+
+
+async def test_min_pool_acks_and_clears_queued():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from service.writer import WriterProcessor
+
+    processor = WriterProcessor(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    processor._count_txs = AsyncMock(return_value=3)
+    with patch("service.writer.clear_queued", new=AsyncMock()) as clear:
+        assert await processor.process_candidate("ab" * 64) == "ack"
+    clear.assert_awaited()

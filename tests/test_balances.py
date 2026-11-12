@@ -1,9 +1,25 @@
+import asyncio
+from unittest.mock import MagicMock
+
 import pytest
 
 from src.config import DEV_ADDR
 from src.database.mongodb import MongoDB
 from src.database.redis import Redis
 from src.utils.profile import balance_from_ledger, get_balance
+
+
+@pytest.mark.asyncio
+async def test_get_balance_timeout_is_not_zero(monkeypatch):
+    monkeypatch.setattr("src.utils.profile.BALANCE_TIMEOUT", 0.05)
+
+    async def hang(*_args, **_kwargs):
+        await asyncio.sleep(1)
+
+    redis = MagicMock()
+    redis.client.get = hang
+    with pytest.raises(asyncio.TimeoutError):
+        await get_balance("addr", MagicMock(), redis)
 
 
 @pytest.mark.integration

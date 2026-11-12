@@ -38,11 +38,9 @@ async def get_balance(addr: str, db: MongoDB, redis: Redis) -> int:
     ``credit`` — плательщик, ``debit`` — получатель (см. ``balance_from_ledger``).
     """
     balance_key = f"balance:{addr}"
-    try:
-        balance = await asyncio.wait_for(redis.client.get(balance_key), timeout=BALANCE_TIMEOUT)
-        if balance is None:
-            balance = await asyncio.wait_for(balance_from_ledger(addr, db), timeout=BALANCE_TIMEOUT) or 0
-            await redis.client.set(balance_key, balance)
-        return int(balance)
-    except asyncio.TimeoutError:
-        return 0
+    # Таймаут и ошибка соединения — не ноль. Ноль только после успешного чтения.
+    balance = await asyncio.wait_for(redis.client.get(balance_key), timeout=BALANCE_TIMEOUT)
+    if balance is None:
+        balance = await asyncio.wait_for(balance_from_ledger(addr, db), timeout=BALANCE_TIMEOUT) or 0
+        await redis.client.set(balance_key, balance)
+    return int(balance)

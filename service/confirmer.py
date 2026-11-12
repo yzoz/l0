@@ -150,8 +150,8 @@ class ConfirmationProcessor:
             удалена из графа как подтверждённая — тогда пропускаем);
           * nack(requeue=True) — временные ошибки графа/очередей, событие
             вернётся и будет обработано повторно;
-          * nack(requeue=False) — повреждённое сообщение (не tx_hash) или
-            необработанное исключение: терминальный отказ.
+          * nack(requeue=False) — повреждённое сообщение (не tx_hash);
+          * nack(requeue=True) — сбой драйвера или необработанное исключение.
         """
         tx_hash = message.body.decode("utf-8").strip()
         # Валидация формата: событие — строго plain-text tx_hash без JSON.
@@ -187,11 +187,11 @@ class ConfirmationProcessor:
             #   service   = "confirmer"
             #   event     = "reject"
             #   reason    = f"confirmer:{type(e).__name__}"
-            #   outcome   = "drop"       # терминально, retry не будет
-            #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
-            #   error     = str(e)       # текст исключения для диагностики
+            #   outcome   = "requeue"
+            #   tx_hash   = tx_hash
+            #   error     = str(e)
             #   queue     = "mid"
-            await message.nack(requeue=False)
+            await message.nack(requeue=True)
             return
 
         await message.ack()

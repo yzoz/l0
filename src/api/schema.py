@@ -36,23 +36,17 @@ async def get_tx(
         time_direction = "$lt"
         time = -time
 
-    q = {
-        "amount": {amount_direction: amount},
-        "time": {time_direction: time},
-    }
-
-    if msg is not None:
-        if msg:
-            q["msg"] = {"$ne": "null"}
-        else:
-            q["msg"] = "null"
-
+    clauses = [{"amount": {amount_direction: amount}, "time": {time_direction: time}}]
+    if msg is True:
+        clauses.append({"msg": {"$type": "string", "$gt": ""}})
+    elif msg is False:
+        clauses.append({"$or": [{"msg": ""}, {"msg": {"$exists": False}}]})
     if addr:
-        q["$or"] = [{"credit": addr}, {"debit": addr}]
+        clauses.append({"$or": [{"credit": addr}, {"debit": addr}]})
+    query = clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
-    return [
-        TxType.from_pydantic(TxSend(**t)) for t in await db.find({"$query": q, "$orderby": {"_id": -1}}, skip, limit)
-    ]
+    docs = await db.find(query, skip, limit, sort=[("_id", -1)])
+    return [TxType.from_pydantic(TxSend(**t)) for t in docs]
 
 
 # Определение GraphQL схемы

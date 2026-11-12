@@ -49,6 +49,7 @@ from src.database.queues import (
 from src.database.redis import Redis
 from src.models.tx import TxWrite
 from src.telemetry import metrics
+from src.utils.lock import redis_lock
 from src.utils.profile import get_balance
 
 logger = logging.getLogger(__name__)
@@ -91,8 +92,8 @@ class WriterProcessor:
             отложен, отброшен min-pool guard'ом или уже обработан);
           * nack(requeue=True) — временная ошибка: маркер queued остаётся,
             сообщение вернётся и обработка повторится;
-          * nack(requeue=False) — повреждённое сообщение (не tx_hash) или
-            необработанное исключение: терминальный отказ.
+          * nack(requeue=False) — повреждённое сообщение (не tx_hash);
+          * nack(requeue=True) — сбой драйвера или необработанное исключение.
         """
         tx_hash = message.body.decode("utf-8").strip()
         if not _HASH_RE.match(tx_hash):
@@ -128,11 +129,11 @@ class WriterProcessor:
             #   service   = "writer"
             #   event     = "reject"
             #   reason    = f"writer:{type(e).__name__}"
-            #   outcome   = "drop"       # терминально, retry не будет
-            #   tx_hash   = tx_hash       # идентификатор транзакции (128 hex)
-            #   error     = str(e)       # текст исключения для диагностики
+            #   outcome   = "requeue"
+            #   tx_hash   = tx_hash
+            #   error     = str(e)
             #   queue     = "out"
-            await message.nack(requeue=False)
+            await message.nack(requeue=True)
             return
 
         if outcome == "retry":
@@ -165,11 +166,12 @@ class WriterProcessor:
         if num_txs <= PARENTS:
             metrics.inc("dropped")
             metrics.event("info", "drop", f"{short} отброшен: пул <= {PARENTS}", ref=tx_hash, key=f"drop:{tx_hash}")
-            return "retry" # HACK вот тут пока не ясно.. на самом деле не 100% гарантия, что эти три не улетят.. надо тэстить
+            await clear_queued(self.redis, tx_hash)
+            return "ack"
 
         async with self.dag.driver.session() as session:
             # Идемпотентность: одна обработка кандидата за раз.
-            async with self.redis.client.lock(f"writer:{tx_hash}"):
+            async with redis_lock(self.redis.client, f"writer:{tx_hash}"):
                 token = await queued_token(self.redis, tx_hash)
 
                 # Шаг 2. Уже подтверждён — добиваем «хвост» (повторная доставка
@@ -225,26 +227,27 @@ class WriterProcessor:
                 # Шаг 5. Проверка баланса. У минта нет плательщика: проверка
                 # баланса его только ложно отсекает (пустой credit даёт баланс 0),
                 # поэтому пропускаем.
-                if not _is_mint(tx):
-                    balance = await get_balance(tx.credit, self.db, self.redis)
-                    if balance < tx.amount:
-                        metrics.inc("insufficient")
-                        metrics.event(
-                            "warn",
-                            "funds",
-                            f"{short} недостаточно средств",
-                            ref=tx_hash,
-                            key=f"funds:{tx_hash}",
-                        )
-                        logger.info(f"{short} NO FUND")
-                        await self._kill_subtree(session, tx_hash)
-                        await clear_queued(self.redis, tx_hash)
-                        return "ack"
-
-                # Шаг 6. Финализация: Mongo → Redis. Узел из графа здесь ещё НЕ
-                # удаляется — удаление входит в «хвост» (_finish_tail), чтобы
-                # deferred-дети были перепоставлены ДО потери рёбер.
-                status = await self._confirm(session, tx_hash, data)
+                # Шаг 5–6. Минт не двигает баланс и не берёт лок credit.
+                # Перевод: лок на время «прочитал баланс → Mongo → Redis».
+                if _is_mint(tx):
+                    status = await self._confirm(session, tx_hash, data)
+                else:
+                    async with redis_lock(self.redis.client, f"credit:{tx.credit}"):
+                        balance = await get_balance(tx.credit, self.db, self.redis)
+                        if balance < tx.amount:
+                            metrics.inc("insufficient")
+                            metrics.event(
+                                "warn",
+                                "funds",
+                                f"{short} недостаточно средств",
+                                ref=tx_hash,
+                                key=f"funds:{tx_hash}",
+                            )
+                            logger.info(f"{short} NO FUND")
+                            await self._kill_subtree(session, tx_hash)
+                            await clear_queued(self.redis, tx_hash)
+                            return "ack"
+                        status = await self._confirm(session, tx_hash, data)
                 if status == "failed":
                     # Временная ошибка финализации (Mongo insert / Redis pipeline).
                     # Маркер queued остаётся, сообщение вернётся повторно.
@@ -269,8 +272,14 @@ class WriterProcessor:
             logger.warning(f"Failed to requeue deferred children of {short}: {e}")
             return "retry"
 
-        # Узел удалён — рёбра потеряны, дети уже в очереди.
-        await self._delete_node(session, tx_hash)
+        # Дети уже в очереди. Узел удаляем только если пул останется больше пола.
+        async with redis_lock(self.redis.client, "pool:floor"):
+            if await self._count_txs() <= PARENTS:
+                await self._release_marker(tx_hash, token)
+                logger.info(f"{short} kept: pool floor")
+                return "ack"
+            if not await self._delete_node(session, tx_hash):
+                return "retry"
         await self._release_marker(tx_hash, token)
         logger.info(f"{short} 200")
         return "ack"
@@ -418,7 +427,7 @@ class WriterProcessor:
     async def _delete_node(self, session, tx_hash: str) -> bool:
         """Удаляет узел транзакции из графа Memgraph."""
         try:
-            async with self.redis.client.lock(f"dag:{tx_hash}"):
+            async with redis_lock(self.redis.client, f"dag:{tx_hash}"):
                 await session.run(
                     """
                     MATCH (t:Transaction {hash: $hash})
@@ -477,7 +486,7 @@ class WriterProcessor:
         хранила зависшие кандидаты.
         """
         try:
-            async with self.redis.client.lock(f"dag:{tx_hash}"):
+            async with redis_lock(self.redis.client, f"dag:{tx_hash}"):
                 result = await session.run(
                     """
                     MATCH (t:Transaction {hash: $hash})

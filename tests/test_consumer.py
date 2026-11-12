@@ -6,8 +6,10 @@ import json
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import base58
 import pytest
 from aio_pika import IncomingMessage
+from nacl.signing import SigningKey
 
 from service.consumer import ConsumerProcessor, ConsumerService
 from service.ratelimit import RateLimiter
@@ -16,20 +18,29 @@ from src.database.mongodb import MongoDB
 from src.database.queues import RabbitMQ
 from src.database.redis import Redis
 from src.models.tx import TxStore
+from src.utils.crypto import sign_message
+from src.utils.data import ordered_sum
+
+
+def _signed_tx(**overrides) -> TxStore:
+    sk = SigningKey.generate()
+    fields = {
+        "credit": base58.b58encode(bytes(sk.verify_key)).decode(),
+        "debit": "EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU2",
+        "amount": 100,
+        "uniq": "tx123",
+        "parents": ["parent1", "parent2", "parent3"],
+        "msg": "test",
+    }
+    fields.update(overrides)
+    sign = sign_message(base58.b58encode(bytes(sk)).decode(), ordered_sum(fields))
+    return TxStore(**fields, sign=sign)
 
 
 # Фикстура для создания тестового объекта TxStore
 @pytest.fixture
 def tx_store():
-    return TxStore(
-        credit="EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU1",
-        debit="EDs139V82BerHAYyJNNzxniWPE7VETnxuw4nuAxk9fU2",
-        amount=100,
-        uniq="tx123",
-        parents=["parent1", "parent2", "parent3"],
-        msg="test",
-        sign="signature",
-    )
+    return _signed_tx()
 
 
 # Фикстура для создания мока сообщения
@@ -63,7 +74,7 @@ def processor():
     redis.client = MagicMock()
 
     @asynccontextmanager
-    async def lock(_key):
+    async def lock(_key, *args, **kwargs):
         yield
 
     redis.client.lock = lock
@@ -310,3 +321,50 @@ async def test_consumer_service_process_message_error(processor, message):
     message.body = b"invalid_json"
     await processor.process_message(message)
     message.nack.assert_called_once_with(requeue=False)
+
+
+@pytest.mark.asyncio
+async def test_bad_sign_is_terminal(processor, tx_store, message):
+    bad = TxStore(**{**tx_store.model_dump(), "sign": "00"})
+    processor.add_to_graph = AsyncMock()
+    processor.redis.client.set = AsyncMock()
+    await processor.process_transaction(bad, message)
+    message.nack.assert_awaited_with(requeue=False)
+    processor.add_to_graph.assert_not_called()
+    processor.redis.client.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_infra_error_requeues(processor, message):
+    processor.parse_message = MagicMock(side_effect=ConnectionError("down"))
+    await processor.process_message(message)
+    message.nack.assert_awaited_with(requeue=True)
+
+
+def _session_returning(record):
+    session = MagicMock()
+    result = MagicMock()
+    result.single = AsyncMock(return_value=record)
+    session.run = AsyncMock(return_value=result)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm)
+
+
+@pytest.mark.asyncio
+async def test_verify_parents_accepts_mongo(processor, tx_store):
+    processor.dag = MagicMock()
+    processor.dag.driver.session = _session_returning(None)
+    processor.redis.client.exists = AsyncMock(return_value=False)
+    processor.db.find_one = AsyncMock(return_value={"hash": "parent1"})
+    assert await processor.verify_parents("ab" * 64, tx_store) is True
+
+
+@pytest.mark.asyncio
+async def test_create_edges_miss_is_not_success(processor, tx_store):
+    processor.dag = MagicMock()
+    processor.dag.driver.session = _session_returning(None)
+    processor.redis.client.exists = AsyncMock(return_value=False)
+    processor.db.find_one = AsyncMock(return_value=None)
+    assert await processor._create_edges("ab" * 64, tx_store) is False
