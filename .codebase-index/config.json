@@ -1,0 +1,24 @@
+{
+  "embeddingProvider": "custom",
+  "customProvider": {
+    "baseUrl": "http://127.0.0.1:8080/v1",
+    "model": "embeddinggemma2",
+    "dimensions": 768,
+    "apiKey": "no-key",
+    "maxTokens": 4096,
+    "timeoutMs": 300000,
+    "concurrency": 1,
+    "requestIntervalMs": 300,
+    "maxBatchSize": 1
+  },
+  "scope": "project",
+  "indexing": {
+    "autoIndex": true,
+    "watchFiles": true,
+    "maxFileSize": 1048576
+  },
+  "search": {
+    "maxResults": 15,
+    "minScore": 0.15
+  }
+}
